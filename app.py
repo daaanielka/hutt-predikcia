@@ -1,785 +1,730 @@
+# -*- coding: utf-8 -*-
 """
-Predikcia výsledku HUTT testu (synkopa)
-Streamlit webová aplikácia – redesign pre klinické použitie
-Model: Random Forest – Anamnéza (chi² výber)
+app_10d_demo.py  –  Demo aplikácia pre lekárov (dvojkrokový prístup)
+Predikcia výsledku HUTT testu (krátkodobá strata vedomia)
+Bakalárska práca – Daniela
+
+Krok 1: Anamnestické údaje (5 polí) → predbežný výsledok
+Krok 2: Dotazníkové otázky (dynamický počet podľa modelu) → spresnený výsledok + porovnanie
+
+Spustenie: streamlit run app_10d_demo.py
 """
+
 import streamlit as st
 import numpy as np
-import os
-import csv
-import uuid
-from datetime import datetime
+import pandas as pd
+import joblib, os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-# gspread – voliteľná závislosť (len na Streamlit Cloud)
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    GSPREAD_AVAILABLE = True
-except ImportError:
-    GSPREAD_AVAILABLE = False
-
-# ── PAGE CONFIG ────────────────────────────────────────────────────────────────
+# ── Nastavenia stránky ──────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="HUTT Predikcia – Synkopa",
+    page_title="HUTT Prediktor",
     page_icon="🫀",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded",
 )
 
-# ── CUSTOM CSS ─────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-  /* Základné štýly */
-  .stApp { font-family: 'Segoe UI', Arial, sans-serif; background: #F0F4F8; }
+# ── Cesty k modelom ─────────────────────────────────────────────────────────
+BASE     = os.path.dirname(os.path.abspath(__file__))
+PATH_ANA = os.path.join(BASE, "model_10d_anamneza.joblib")
+PATH_KOM = os.path.join(BASE, "model_10d_kombinacia.joblib")
 
-  /* Hlavička */
-  .app-header {
-    background: linear-gradient(135deg, #0D47A1 0%, #1565C0 60%, #1976D2 100%);
-    border-radius: 14px; padding: 22px 28px 18px 28px;
-    margin-bottom: 20px; color: white;
-    display: flex; align-items: center; gap: 18px;
-  }
-  .app-header h1 {
-    margin: 0; font-size: 1.55rem; font-weight: 700; color: white !important; line-height: 1.2;
-  }
-  .app-header .subtitle {
-    font-size: 0.88rem; color: rgba(255,255,255,0.82); margin-top: 4px;
-  }
-  .app-header .badge {
-    background: rgba(255,255,255,0.18); border-radius: 20px;
-    padding: 3px 12px; font-size: 0.78rem; display: inline-block; margin-top: 6px;
-  }
+REQUIRED_KEYS = {"pipeline", "features", "threshold", "model_name", "AUC_CV"}
 
-  /* Karty sekcií */
-  .card {
-    background: white; border-radius: 14px; padding: 20px 22px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 16px;
-  }
-  .card-title {
-    font-size: 0.95rem; font-weight: 700; color: #0D47A1;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    border-bottom: 2px solid #E8EEF7; padding-bottom: 10px; margin-bottom: 14px;
-  }
+@st.cache_resource
+def load_models():
+    ana = joblib.load(PATH_ANA)
+    kom = joblib.load(PATH_KOM)
+    # Schema check – overi že model obsahuje všetky povinné kľúče
+    for label, pkg in [("Anamnéza", ana), ("Kombinácia", kom)]:
+        missing = REQUIRED_KEYS - set(pkg.keys())
+        if missing:
+            raise ValueError(f"Model {label} neobsahuje kľúče: {missing}. "
+                             f"Pretrénujte model (10d_hutt_predikcia.py).")
+    return ana, kom
 
-  /* Výsledkový box */
-  .result-high   { background: linear-gradient(135deg,#FDEDEC,#FBD7D4); border: 2px solid #E74C3C; color: #922B21; }
-  .result-medium { background: linear-gradient(135deg,#FEF9E7,#FDE8A0); border: 2px solid #E67E22; color: #7D4608; }
-  .result-low    { background: linear-gradient(135deg,#EAFAF1,#C8F5DC); border: 2px solid #27AE60; color: #1D6A39; }
-  .result-box {
-    border-radius: 14px; padding: 20px 22px; text-align: center;
-    margin: 10px 0 16px 0;
-  }
-  .result-prob { font-size: 3rem; font-weight: 800; line-height: 1; }
-  .result-label { font-size: 1.15rem; font-weight: 700; margin: 6px 0 4px 0; }
-  .result-desc  { font-size: 0.88rem; opacity: 0.85; }
+try:
+    pkg_ana, pkg_kom = load_models()
+    models_loaded = True
+except Exception as e:
+    st.error(f"Chyba pri načítaní modelov: {e}")
+    models_loaded = False
+    pkg_ana, pkg_kom = None, None
 
-  /* Klinické odporúčanie */
-  .rec-box {
-    border-radius: 10px; padding: 14px 18px; margin: 8px 0 16px 0;
-    font-size: 0.92rem; font-weight: 500;
-  }
-  .rec-high   { background: #FFF3F2; border-left: 5px solid #E74C3C; color: #6B1A14; }
-  .rec-medium { background: #FFFBF0; border-left: 5px solid #E67E22; color: #5D3208; }
-  .rec-low    { background: #F2FBF5; border-left: 5px solid #27AE60; color: #154D2A; }
+# ── Vybrané dotazníkové atribúty – načítané priamo z modelu ────────────────
+# Zabezpečuje konzistenciu: ak sa model pretrénuje, zoznam sa automaticky aktualizuje
+SELECTED_DOT = pkg_kom.get("selected_dot_features", []) if models_loaded else []
+N_DOT = len(SELECTED_DOT)
+N_ANA = pkg_ana.get("n_ana", 5) if models_loaded else 5  # počet anamnestických premenných
 
-  /* Gauge lišta */
-  .gauge-wrap { margin: 8px 0 4px 0; }
-  .gauge-track {
-    background: linear-gradient(to right, #27AE60 0%, #27AE60 40%,
-                                          #E67E22 40%, #E67E22 60%,
-                                          #E74C3C 60%, #E74C3C 100%);
-    border-radius: 8px; height: 14px; position: relative; overflow: visible;
-  }
-  .gauge-needle {
-    position: absolute; top: -5px; width: 4px; height: 24px;
-    background: #1F2937; border-radius: 2px;
-    transform: translateX(-50%);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-  }
-  .gauge-labels {
-    display: flex; justify-content: space-between;
-    font-size: 0.72rem; color: #888; margin-top: 4px;
-  }
-
-  /* Metrické karty */
-  .m-card {
-    background: #F8FAFF; border: 1px solid #E0E8F5; border-radius: 10px;
-    padding: 10px 14px; text-align: center;
-  }
-  .m-val   { font-size: 1.5rem; font-weight: 700; color: #0D47A1; }
-  .m-label { font-size: 0.7rem; color: #888; text-transform: uppercase; margin-top: 2px; }
-
-  /* Disclaimer */
-  .disclaimer {
-    background: #FFF8E1; border: 1px solid #FFD54F;
-    border-radius: 10px; padding: 10px 16px;
-    font-size: 0.83rem; color: #5D4037; margin-bottom: 16px;
-  }
-
-  /* Tlačidlo */
-  .stButton > button {
-    background: linear-gradient(135deg, #0D47A1, #1976D2) !important;
-    color: white !important; border: none !important;
-    border-radius: 10px !important; font-size: 1rem !important;
-    font-weight: 600 !important; padding: 14px 0 !important;
-    width: 100% !important; margin-top: 8px !important;
-    transition: all 0.2s !important; letter-spacing: 0.02em !important;
-    box-shadow: 0 4px 12px rgba(13,71,161,0.25) !important;
-  }
-  .stButton > button:hover {
-    background: linear-gradient(135deg, #0A3880, #1565C0) !important;
-    box-shadow: 0 6px 16px rgba(13,71,161,0.35) !important;
-    transform: translateY(-1px) !important;
-  }
-
-  /* Inputs */
-  div[data-testid="stNumberInput"] input {
-    font-size: 1rem !important; border-radius: 8px !important;
-  }
-  div[data-testid="stSelectbox"] > div { border-radius: 8px !important; }
-
-  /* Radio – prepínače áno/nie */
-  div[data-testid="stRadio"] label {
-    font-size: 0.88rem !important;
-  }
-  div[data-testid="stRadio"] > div {
-    gap: 6px !important;
-  }
-
-  /* Feature importance pruhy */
-  .fi-row {
-    display: flex; align-items: center; gap: 8px;
-    margin: 5px 0; font-size: 0.8rem;
-  }
-  .fi-label { width: 180px; color: #444; flex-shrink: 0; }
-  .fi-track { flex: 1; background: #EEF2F8; border-radius: 6px; height: 9px; }
-  .fi-bar   {
-    height: 9px; border-radius: 6px;
-    background: linear-gradient(to right, #1565C0, #0D47A1);
-  }
-  .fi-val   { width: 40px; text-align: right; color: #666; }
-
-  /* Info box */
-  .info-box {
-    background: #EBF3FB; border-left: 4px solid #1976D2;
-    padding: 10px 14px; border-radius: 0 8px 8px 0;
-    font-size: 0.85rem; color: #1a3a5c; margin: 6px 0;
-  }
-
-  /* Popis otázky */
-  .q-help { font-size: 0.75rem; color: #888; margin-top: -4px; margin-bottom: 4px; }
-</style>
-""", unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MODEL – Random Forest (implementácia from scratch)
-# ══════════════════════════════════════════════════════════════════════════════
-
-FEATURES = ["Pohlavie_enc","Vek","TK_sys","TK_dia","Pulz",
-            "E5","D2","K4","H1","K1","P9","E1","N1","P12","F9","E3"]
-
-FEATURE_LABELS = {
-    "Pohlavie_enc": "Pohlavie",
-    "Vek":    "Vek",
-    "TK_sys": "TK systolický",
-    "TK_dia": "TK diastolický",
-    "Pulz":   "Pulz",
-    "E5":  "E5 – Synkopa v rodine",
-    "D2":  "D2 – Strata vedomia pri vstávaní",
-    "K4":  "K4 – Epizóda pri dlhom státí",
-    "H1":  "H1 – Pocit tepla pred epizódou",
-    "K1":  "K1 – Spúšťač: ortostáza",
-    "P9":  "P9 – Úraz pri páde",
-    "E1":  "E1 – Rod. anamnéza srdca",
-    "N1":  "N1 – Predchádzajúca synkopa",
-    "P12": "P12 – Trvanie bezvedomia",
-    "F9":  "F9 – Nevoľnosť po epizóde",
-    "E3":  "E3 – Únava po epizóde",
+# ── Popisky otázok (text z dotazníka) ──────────────────────────────────────
+OTAZKY = {
+    # Blok B – Dôvod vyšetrenia
+    "B":    "B – Dôvod vyšetrenia (strata vedomia alebo iný stav)?",
+    "B1":   "B1 – Strata vedomia (dôvod vyšetrenia)?",
+    "B2":   "B2 – Pocity hroziacej straty vedomia?",
+    "B3":   "B3 – Stav po resuscitácii?",
+    "B4":   "B4 – Stav po epileptickom záchvate?",
+    "B5":   "B5 – Opakované pády?",
+    # Blok C – Vznik ťažkostí (C1/C3/C4 = vek pri udalosti, C2 = počet)
+    "C":    "C – Pacient uviedol konkrétne ťažkosti?",
+    "C1":   "C1 – Vek pri prvom výskyte ťažkostí",
+    "C2":   "C2 – Celkový počet odpadnutí",
+    "C3":   "C3 – Vek pri poslednom odpadnutí",
+    "C4":   "C4 – Vek v období najhorších ťažkostí",
+    # Blok D – Situácie vedúce k synkope
+    "D":    "D – Strata vedomia bola vyvolaná provokujúcim faktorom?",
+    "D1":   "D1 – Strata vedomia pri státí?",
+    "D2":   "D2 – Strata vedomia do 1 minúty po postavení sa?",
+    "D3":   "D3 – Strata vedomia pri chôdzi?",
+    "D4":   "D4 – Strata vedomia pri fyzickej námahe?",
+    "D5":   "D5 – Strata vedomia v sede?",
+    "D6":   "D6 – Strata vedomia poležačky?",
+    # Blok E – Faktory vedúce k strate vedomia
+    "E":    "E – Strata vedomia bola vyvolaná konkrétnym faktorom?",
+    "E1":   "E1 – Strata vedomia v preľudnených priestoroch?",
+    "E2":   "E2 – Strata vedomia v dusnom prostredí?",
+    "E3":   "E3 – Strata vedomia v teplom prostredí?",
+    "E4":   "E4 – Strata vedomia po pohľade na krv?",
+    "E5":   "E5 – Strata vedomia po nepríjemných emóciách (strach, úzkosť, rozrušenie)?",
+    "E6":   "E6 – Strata vedomia pri medicínskom výkone?",
+    "E7":   "E7 – Strata vedomia po bolesti?",
+    "E8":   "E8 – Strata vedomia pri dehydratácii?",
+    "E9":   "E9 – Strata vedomia počas menštruácie?",
+    "E10":  "E10 – Strata vedomia pri strate krvi?",
+    # Blok F – Špecifické situácie spojené so stratou vedomia
+    "F":    "F – Strata vedomia pri špecifickej situácii?",
+    "F1":   "F1 – Strata vedomia pri stolici?",
+    "F2":   "F2 – Strata vedomia pri močení?",
+    "F3":   "F3 – Strata vedomia pri kašli?",
+    "F4":   "F4 – Strata vedomia pri kýchaní / smrkaní?",
+    "F5":   "F5 – Strata vedomia pri jedení / prehĺtaní?",
+    "F6":   "F6 – Strata vedomia po náhlej bolesti?",
+    "F7":   "F7 – Strata vedomia počas fyzickej námahy?",
+    "F8":   "F8 – Strata vedomia pri hlade?",
+    "F9":   "F9 – Strata vedomia pri nedostatku spánku / únave?",
+    "F10":  "F10 – Strata vedomia v inej špecifickej situácii?",
+    # Blok G – Lieky alebo alkohol
+    "G":    "G – Užitie liekov alebo alkoholu hodinu pred stratou vedomia?",
+    # Blok H – Symptómy pred stratou vedomia
+    "H":    "H – Príznaky tesne pred stratou vedomia?",
+    "H1":   "H1 – Nevoľnosť / pocit na zvracanie pred stratou vedomia?",
+    "H2":   "H2 – Pocit tepla / horúčavy pred stratou vedomia?",
+    "H3":   "H3 – Potenie (pot) pred stratou vedomia?",
+    "H4":   "H4 – Zahmlievanie pred očami pred stratou vedomia?",
+    "H5":   "H5 – Hučanie v ušiach pred stratou vedomia?",
+    "H6":   "H6 – Búšenie srdca pred stratou vedomia (1)?",
+    "H7":   "H7 – Búšenie srdca pred stratou vedomia (2)?",
+    "H8":   "H8 – Bolesť na hrudníku pred stratou vedomia?",
+    "H9":   "H9 – Neobvyklý zápach pred stratou vedomia?",
+    "H10":  "H10 – Neobvyklé zvuky pred stratou vedomia?",
+    "H11":  "H11 – Poruchy reči alebo slabosť polovice tela pred stratou vedomia?",
+    "H12":  "H12 – Žiadne zvláštne pocity pred stratou vedomia?",
+    "H13":  "H13 – Nepamätám sa na pocity pred stratou vedomia?",
+    "H14":  "H14 – Iné príznaky pred stratou vedomia?",
+    # Blok I – Trvanie symptómov pred stratou vedomia
+    "I":    "I – Príznaky pred stratou vedomia trvali istú dobu?",
+    "I1":   "I1 – Príznaky trvali niekoľko sekúnd?",
+    "I2":   "I2 – Príznaky trvali do 1 minúty?",
+    "I3":   "I3 – Príznaky trvali do 5 minút?",
+    "I4":   "I4 – Príznaky trvali viac ako 5 minút?",
+    # Blok J – Reakcia pacienta pred stratou vedomia
+    "J":    "J – Pacient reagoval pri hroziacej strate vedomia?",
+    "J2":   "J2 – Ľahol si pri hroziacej strate vedomia?",
+    "J3":   "J3 – Nestihol nič urobiť pred stratou vedomia?",
+    # Blok K – Trvanie bezvedomia podľa svedkov
+    "K":    "K – Trvanie bezvedomia podľa svedkov?",
+    "K1":   "K1 – Bezvedomie trvalo niekoľko sekúnd (podľa svedkov)?",
+    "K2":   "K2 – Bezvedomie trvalo do 1 minúty (podľa svedkov)?",
+    "K3":   "K3 – Bezvedomie trvalo do 5 minút (podľa svedkov)?",
+    "K4":   "K4 – Bezvedomie trvalo viac ako 5 minút (podľa svedkov)?",
+    # Blok L, M
+    "L":    "L – Kŕče počas bezvedomia?",
+    "M":    "M – Inkontinencia (stolica alebo moč) počas bezvedomia?",
+    # Blok N – Stav po prebudení
+    "N":    "N – Pamäť na udalosti po strate vedomia?",
+    "N1":   "N1 – Pohryzený jazyk alebo pery po strate vedomia?",
+    "N2":   "N2 – Poranenie / úder pri páde?",
+    "N3":   "N3 – Dezorientovanosť viac ako 30 minút po prebratí (podľa svedkov)?",
+    "N4":   "N4 – Bolesti hlavy alebo svalov po prebratí?",
+    "N5":   "N5 – Nevoľnosť po prebratí?",
+    "N6":   "N6 – Cítil/a sa normálne po prebratí (bez ťažkostí)?",
+    "N7":   "N7 – Nepamätá sa na stav po prebratí?",
+    # Blok O – Rodinná anamnéza
+    "O":    "O – Výskyt ochorení v rodine?",
+    "O1":   "O1 – Náhle úmrtie člena rodiny?",
+    "O2":   "O2 – Ochorenie srdca v rodine (1)?",
+    "O3":   "O3 – Ochorenie srdca v rodine (2)?",
+    "O4":   "O4 – Srdcová arytmia / kardiostimulátor v rodine?",
+    "O5":   "O5 – Ochorenie mozgu / epilepsia v rodine?",
+    # Blok P – Osobná anamnéza
+    "P":    "P – Osobná anamnéza – liečené ochorenia?",
+    "P1":   "P1 – Ochorenie srdca (1) v osobnej anamnéze?",
+    "P2":   "P2 – Ochorenie srdca (2) v osobnej anamnéze?",
+    "P3":   "P3 – Ochorenie chlopní v osobnej anamnéze?",
+    "P4":   "P4 – Srdcová slabosť (srdcové zlyhávanie) v osobnej anamnéze?",
+    "P5":   "P5 – Koronárna choroba srdca v osobnej anamnéze?",
+    "P6":   "P6 – Srdcové arytmie v osobnej anamnéze?",
+    "P7":   "P7 – Búšenie srdca v osobnej anamnéze?",
+    "P9":   "P9 – Bolesti na hrudníku v osobnej anamnéze?",
+    "P10":  "P10 – Vysoký tlak krvi (hypertenzia) v osobnej anamnéze?",
+    "P11":  "P11 – Nízky tlak krvi (hypotenzia) v osobnej anamnéze?",
+    "P12":  "P12 – Závraty v osobnej anamnéze?",
+    "P13":  "P13 – Ochorenia obličiek v osobnej anamnéze?",
+    "P14":  "P14 – Diabetes (cukrovka) v osobnej anamnéze?",
+    "P15":  "P15 – Anémia (chudokrvnosť) v osobnej anamnéze?",
+    "P16":  "P16 – Astma v osobnej anamnéze?",
+    "P17":  "P17 – Ochorenia pľúc v osobnej anamnéze?",
+    "P18":  "P18 – Ochorenia priedušiek v osobnej anamnéze?",
+    "P19":  "P19 – Ochorenia žalúdka v osobnej anamnéze?",
+    "P20":  "P20 – Ochorenia čreva v osobnej anamnéze?",
+    "P21":  "P21 – Ochorenia štítnej žľazy v osobnej anamnéze?",
+    "P22":  "P22 – Endokrinologické ochorenia v osobnej anamnéze?",
+    "P23":  "P23 – Bolesti hlavy v osobnej anamnéze?",
+    "P24":  "P24 – Neurologické ochorenia v osobnej anamnéze?",
+    "P25":  "P25 – Parkinsonova choroba v osobnej anamnéze?",
+    "P26":  "P26 – Psychiatrické ochorenia v osobnej anamnéze?",
+    "P27":  "P27 – Depresia v osobnej anamnéze?",
+    "P28":  "P28 – Ochorenia krčnej chrbtice v osobnej anamnéze?",
+    "P29":  "P29 – Bolesti chrbta v osobnej anamnéze?",
+    "P30":  "P30 – Reumatologické ochorenia v osobnej anamnéze?",
+    "P31":  "P31 – Nádorové ochorenie v osobnej anamnéze?",
+    "P32":  "P32 – Prekonané operácie v osobnej anamnéze?",
+    "P33":  "P33 – Prekonané úrazy v osobnej anamnéze?",
+    "P34":  "P34 – Alergie v osobnej anamnéze?",
+    # Blok Q – Predchádzajúce vyšetrenia
+    "Q":    "Q – Predchádzajúce vyšetrenia kvôli stratám vedomia?",
+    "Q2":   "Q2 – Záťažový test (bicyklová ergometria)?",
+    "Q3":   "Q3 – Koronografické vyšetrenie?",
+    "Q5":   "Q5 – Pažerákova stimulácia?",
+    "Q6":   "Q6 – Invazívne vyšetrenie arytmií (EFV)?",
+    "Q7":   "Q7 – Nukleárne vyšetrenie srdca (SPECT)?",
+    "Q8":   "Q8 – CT srdca?",
+    "Q9":   "Q9 – MRI srdca?",
+    "Q10":  "Q10 – Neurologické vyšetrenia?",
+    "Q11":  "Q11 – USG mozgových ciev?",
+    "Q14":  "Q14 – Elektromyografia (EMG)?",
+    "Q15":  "Q15 – Psychiatrické vyšetrenie?",
+    # Blok R – Očkovania
+    "R1":   "R1 – Očkovanie proti HPV?",
+    "R2":   "R2 – Očkovanie proti chrípke?",
+    # Odvodená premenná
+    "Ma_diag_srdcove_ochorenie": "Diagnostikované srdcové ochorenie (P1–P8)?",
 }
 
-QUESTIONNAIRE = [
-    ("E5",  "E5 – Mal niekto z rodiny synkopu alebo kolaps?"),
-    ("D2",  "D2 – Strata vedomia pri vstávaní?"),
-    ("K4",  "K4 – Epizóda nastala po dlhom státí?"),
-    ("H1",  "H1 – Pacient mal pocit tepla pred synkopou?"),
-    ("K1",  "K1 – Synkopu spustilo vstávanie (ortostáza)?"),
-    ("P9",  "P9 – Pacient utrpel úraz pri páde?"),
-    ("E1",  "E1 – Rodinná anamnéza srdcových ochorení?"),
-    ("N1",  "N1 – Pacient mal synkopu v minulosti?"),
-    ("P12", "P12 – Bezvedomie trvalo dlhšie ako obvykle?"),
-    ("F9",  "F9 – Nevoľnosť po epizóde?"),
-    ("E3",  "E3 – Únava po synkope?"),
-]
+# ── Pomocné funkcie ──────────────────────────────────────────────────────────
+def predict(pkg, X_input):
+    prob = pkg["pipeline"].predict_proba(X_input)[0, 1]
+    pred = int(prob >= pkg["threshold"])
+    return prob, pred
 
-RADIO_OPTS = ["—", "Nie", "Áno"]
+_BAND_MARGIN = 0.10  # pásmo neistoty okolo prahu = prah ± MARGIN
 
-def radio_to_val(v):
-    if v == "Nie": return 0.0
-    if v == "Áno": return 1.0
+def score_band(prob, threshold=0.45):
+    """
+    Tri pásma dynamicky podľa prahu modelu.
+      zvýšené  : prob >= threshold + MARGIN
+      hraničné : threshold - MARGIN <= prob < threshold + MARGIN
+      nízke    : prob < threshold - MARGIN
+    Takto sa hraničné pásmo vždy stretáva s rozhodovacím prahom.
+    """
+    if prob >= threshold + _BAND_MARGIN:   return "zvýšené",  "#e74c3c"
+    elif prob >= threshold - _BAND_MARGIN: return "hraničné", "#e67e22"
+    else:                                  return "nízke",    "#27ae60"
+
+def prob_color(prob, threshold=0.45):
+    return score_band(prob, threshold)[1]
+
+def gauge_html(prob, label, subtext="", threshold=0.45):
+    pct  = int(prob * 100)
+    band, col = score_band(prob, threshold)
+    return f"""
+    <div style='text-align:center; padding:12px; background:#fafafa;
+                border-radius:10px; border:1px solid #eee;'>
+      <div style='font-size:0.85em; color:#888; margin-bottom:4px;'>{label}</div>
+      <div style='font-size:3em; font-weight:bold; color:{col}; line-height:1.1;'>{pct}%</div>
+      <div style='background:#e8e8e8; border-radius:8px; height:12px; margin:8px 4px;'>
+        <div style='background:{col}; width:{pct}%; height:12px;
+                    border-radius:8px; transition:width 0.6s;'></div>
+      </div>
+      <div style='font-size:0.82em; font-weight:bold; color:{col}; margin-top:4px;'>
+        Pásmo: {band}</div>
+      <div style='font-size:0.78em; color:#aaa;'>{subtext}</div>
+    </div>"""
+
+def verdict_html(prob, threshold=0.45):
+    band, col = score_band(prob, threshold)
+    if band == "zvýšené":
+        text = "🔴 Zvýšené modelové skóre — odporúča sa klinické posúdenie"
+    elif band == "hraničné":
+        text = "🟠 Hraničné modelové skóre — výsledok je neistý, zvážte doplňujúce vyšetrenie"
+    else:
+        text = "🟢 Nízke modelové skóre — nižší orientačný odhad rizika pozitívneho HUTT testu"
+    return (f"<div style='text-align:center; color:{col}; font-size:1.0em; "
+            f"font-weight:bold; margin-top:6px;'>{text}</div>")
+
+def tristate(label, key):
+    """
+    Tri stavy: Neznáme = NaN (imputácia), Áno = 1.0, Nie = 0.0.
+    Ak symptóm nebol prítomný → zvoľte Nie. Ak neviete → Neznáme.
+    """
+    opt = st.radio(label, ["❓ Neznáme", "✅ Áno", "☐ Nie"],
+                   horizontal=True, key=key, index=0)
+    if opt == "✅ Áno": return 1.0
+    if opt == "☐ Nie":  return 0.0
     return np.nan
 
+def build_kom_input(pohlavie_enc, vek, tk_sys, tk_dia, pulz, dotaznik_vals):
+    """Vytvorí vstupný vektor pre Kombinacia model (všetky features ako NaN, vyplní známe)."""
+    feats = pkg_kom["features"]
+    row = {f: np.nan for f in feats}
+    row["Pohlavie_enc"] = pohlavie_enc
+    row["Vek"]          = vek
+    row["TK_sys"]       = tk_sys
+    row["TK_dia"]       = tk_dia
+    row["Pulz"]         = pulz
+    for kod, val in dotaznik_vals.items():
+        if kod in row:
+            row[kod] = val
+    return np.array([[row[f] for f in feats]])
 
-# ── Decision Tree ──────────────────────────────────────────────────────────────
-class DTree:
-    def __init__(self, max_depth=12, min_split=4, max_features=None):
-        self.max_depth    = max_depth
-        self.min_split    = min_split
-        self.max_features = max_features
+def vyplnenost(dotaznik_vals, numeric_keys):
+    """Počet vyplnených otázok (nie Neznáme / nie NaN pre C1/C2/C4)."""
+    vyplnene = 0
+    for kod, val in dotaznik_vals.items():
+        if kod in numeric_keys:
+            # NaN = neznáme (analýza konvertuje -1→NaN pred tréningom)
+            if val is not None and not np.isnan(float(val)):
+                vyplnene += 1
+        else:
+            if val in (0.0, 1.0):
+                vyplnene += 1
+    return vyplnene
 
-    def _gini(self, y):
-        p = y.mean()
-        return 1 - p*p - (1-p)**2
+# ── Sidebar ──────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/heart-with-pulse.png", width=65)
+    st.title("HUTT Prediktor")
+    st.markdown(f"""
+    **Predikcia výsledku HUTT testu**
+    Bakalárska práca · 2025/2026
 
-    def _split(self, X, y):
-        best = (-1, None, None, -1)
-        n = len(y); pg = self._gini(y); nf = X.shape[1]
-        fi_ = (np.random.choice(nf, self.max_features, replace=False)
-               if self.max_features and self.max_features < nf else range(nf))
-        for fi in fi_:
-            vals = np.unique(X[:, fi])
-            if len(vals) < 2: continue
-            for t in (vals[:-1] + vals[1:]) / 2:
-                lm = X[:, fi] <= t
-                nl, nr = lm.sum(), (~lm).sum()
-                if nl < 2 or nr < 2: continue
-                g = pg - (nl/n)*self._gini(y[lm]) - (nr/n)*self._gini(y[~lm])
-                if g > best[3]:
-                    best = (fi, t, lm, g)
-        return best
+    ---
+    **Dvojkrokový prístup:**
 
-    def _build(self, X, y, d, n_total):
-        if d >= self.max_depth or len(y) < self.min_split or self._gini(y) < 1e-7:
-            return {'leaf': True, 'p': float(y.mean())}
-        fi, t, lm, g = self._split(X, y)
-        if fi == -1 or g < 1e-7:
-            return {'leaf': True, 'p': float(y.mean())}
-        self.fi_acc_[fi] = self.fi_acc_.get(fi, 0) + (len(y) / n_total) * g
-        return {'leaf': False, 'fi': fi, 't': t,
-                'L': self._build(X[lm],  y[lm],  d+1, n_total),
-                'R': self._build(X[~lm], y[~lm], d+1, n_total)}
+    **Krok 1** – Anamnéza *(5 polí)*
+    Rýchly odhad z klinických meraní
 
-    def fit(self, X, y):
-        self.fi_acc_ = {}
-        self.tree_   = self._build(X, y.astype(float), 0, len(y))
-        return self
+    **Krok 2** – Dotazník *({N_DOT} otázok)*
+    Spresnený výsledok s anamnézou
 
-    def _p1(self, x, n):
-        if n['leaf']: return n['p']
-        return self._p1(x, n['L'] if x[n['fi']] <= n['t'] else n['R'])
+    ---
+    **Modely:**
+    - 🟦 **Anamnéza / {pkg_ana.get('model_name','ExtraTrees')}**
+      AUC_CV = {pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · 5 premenných
+    - 🟩 **Kombinácia / {pkg_kom.get('model_name','RF')}**
+      AUC_CV = {pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · 5+{N_DOT} premenných
+      *(skriningový prah={pkg_kom.get('threshold',0.30):.2f}: senzit. 95%, špecif. ~45%)*
 
-    def predict_proba(self, X):
-        return np.array([self._p1(x, self.tree_) for x in X])
+    ---
+    **Tri pásma modelového skóre** *(relatívne k prahovej hodnote modelu)*:
+    🟢 nízke — skóre výrazne pod prahom
+    🟠 hraničné — skóre v okolí prahu (±10 %)
+    🔴 zvýšené — skóre výrazne nad prahom
 
+    **Cieľ:** orientačný odhad výsledku HUTT testu
 
-class RandomForest:
-    def __init__(self, n=200, max_depth=12, seed=42):
-        self.n = n; self.max_depth = max_depth; self.seed = seed
-        self.trees_ = []; self.fidx_ = []
+    ---
+    ⚠️ *Orientačný prototyp.
+    Nenahradzuje klinické rozhodnutie.*
+    """)
 
-    def fit(self, X, y):
-        np.random.seed(self.seed)
-        ns, nf = X.shape
-        mf = max(1, int(np.sqrt(nf)))
-        for _ in range(self.n):
-            bi = np.random.choice(ns, ns, replace=True)
-            fi = np.random.choice(nf, mf, replace=False)
-            tree = DTree(max_depth=self.max_depth, min_split=4, max_features=mf)
-            tree.fit(X[np.ix_(bi, fi)], y[bi])
-            self.trees_.append(tree)
-            self.fidx_.append(fi)
-        return self
+# ── Hlavička ─────────────────────────────────────────────────────────────────
+st.title("🫀 Predikcia výsledku HUTT testu")
+st.markdown(f"""
+Zadajte údaje pacienta v **dvoch krokoch**.
+Krok 1 je povinný, Krok 2 je voliteľný a spresňuje **orientačné modelové skóre** pomocou {N_DOT} otázok z dotazníka.
+Výstup je výskumný prototyp — nenahradzuje klinické rozhodnutie.
+""")
 
-    def predict_proba(self, X):
-        return np.mean([t.predict_proba(X[:, fi])
-                        for t, fi in zip(self.trees_, self.fidx_)], axis=0)
-
-    def feature_importances(self, n_features):
-        fi_global = np.zeros(n_features)
-        for tree, fidx in zip(self.trees_, self.fidx_):
-            for local_j, imp in tree.fi_acc_.items():
-                global_j = fidx[local_j]
-                fi_global[global_j] += imp
-        total = fi_global.sum()
-        if total > 0:
-            fi_global /= total
-        return fi_global
-
-
-@st.cache_resource(show_spinner="Inicializujem model… (prvé spustenie, ~30 s)")
-def get_trained_model():
-    import os, pandas as pd
-
-    base = os.path.dirname(os.path.abspath(__file__))
-    DATA_PATH = os.path.join(base, 'data_full1.csv')
-
-    try:
-        df = pd.read_csv(DATA_PATH)
-    except Exception as e:
-        return None, None, {}, {}
-
-    def parse_bp(val):
-        val = str(val).strip()
-        if val in ("-1","","nan","NEMERAT","NEMER","NEMERST"): return np.nan, np.nan
-        first = val.split("-")[0].split(",")[0].strip()
-        if "/" in first:
-            parts = first.split("/")
-            try:
-                s = float(parts[0])
-                d = float(parts[1].strip()) if parts[1].strip() not in ("-","","nan") else np.nan
-                return s, d
-            except: return np.nan, np.nan
-        return np.nan, np.nan
-
-    bp = df["A2"].map(parse_bp)
-    df["TK_sys"]       = [x[0] for x in bp]
-    df["TK_dia"]       = [x[1] for x in bp]
-    df["Pulz"]         = pd.to_numeric(df["A3"], errors="coerce").replace(-1, np.nan)
-    df["Pohlavie_enc"] = (df["Pohlavie"] == "M").astype(float)
-
-    META = {"Pohlavie","Pohlavie_enc","Vek","Synkopa","Typ Synkopy",
-            "A1","A2","A3","A4","A5","A6","A7","A8","A9","A10",
-            "TK_sys","TK_dia","Pulz","Dátum","Datum narodenia","S","Číslo dotazníka"}
-    for col in df.columns:
-        if col not in META:
-            df[col] = pd.to_numeric(df[col], errors="coerce").replace(-1, np.nan)
-
-    y = df["Synkopa"].astype(int).values
-
-    np.random.seed(42)
-    idx0 = np.where(y == 0)[0]; np.random.shuffle(idx0)
-    idx1 = np.where(y == 1)[0]; np.random.shuffle(idx1)
-    n0 = max(1, int(len(idx0) * 0.2))
-    n1 = max(1, int(len(idx1) * 0.2))
-    te_idx = np.concatenate([idx0[:n0], idx1[:n1]])
-    tr_idx = np.concatenate([idx0[n0:],  idx1[n1:]])
-
-    X_tr = df[FEATURES].iloc[tr_idx].values.astype(float)
-    y_tr = y[tr_idx]
-    X_te = df[FEATURES].iloc[te_idx].values.astype(float)
-    y_te = y[te_idx]
-
-    medians   = np.nanmedian(X_tr, axis=0)
-    X_tr_imp  = np.where(np.isnan(X_tr), medians, X_tr)
-    X_te_imp  = np.where(np.isnan(X_te), medians, X_te)
-
-    model = RandomForest(n=200, max_depth=12, seed=42)
-    model.fit(X_tr_imp, y_tr)
-
-    fi_arr   = model.feature_importances(len(FEATURES))
-    feat_imp = {FEATURES[i]: float(fi_arr[i]) for i in range(len(FEATURES))}
-
-    probs_te = model.predict_proba(X_te_imp)
-    preds_te = (probs_te >= 0.50).astype(int)
-    TP = int(((preds_te == 1) & (y_te == 1)).sum())
-    FP = int(((preds_te == 1) & (y_te == 0)).sum())
-    FN = int(((preds_te == 0) & (y_te == 1)).sum())
-    TN = int(((preds_te == 0) & (y_te == 0)).sum())
-
-    return model, medians, feat_imp, {'TP': TP, 'FP': FP, 'FN': FN, 'TN': TN, 'n': len(te_idx)}
-
-
-def do_predict(inputs, model, medians):
-    x     = np.array([inputs.get(f, np.nan) for f in FEATURES], dtype=float)
-    x_imp = np.where(np.isnan(x), medians, x)
-    return float(model.predict_proba(x_imp.reshape(1, -1))[0])
-
-
-# ── LOGGING ────────────────────────────────────────────────────────────────────
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH  = os.path.join(_BASE_DIR, "predikcie_log.csv")
-
-LOG_COLUMNS = [
-    "id", "cas", "pravdepodobnost_%", "riziko", "skutocny_vysledok",
-    "Pohlavie", "Vek", "TK_sys", "TK_dia", "Pulz",
-    "E5", "D2", "K4", "H1", "K1", "P9", "E1", "N1", "P12", "F9", "E3"
-]
-# Index stĺpca skutocny_vysledok (1-based pre gspread)
-_VYSLEDOK_COL = LOG_COLUMNS.index("skutocny_vysledok") + 1
-
-def _fmt(v):
-    """Formátuje hodnotu pre log – NaN → prázdny reťazec."""
-    if v is None: return ""
-    try:
-        return "" if (isinstance(v, float) and np.isnan(v)) else v
-    except: return v
-
-def _build_row(session_id, inputs, prob, risk_label, pohlavie_str, skutocny_vysledok=""):
-    return [
-        session_id,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        round(prob * 100, 1),
-        risk_label,
-        skutocny_vysledok,
-        pohlavie_str,
-        _fmt(inputs.get("Vek")),
-        _fmt(inputs.get("TK_sys")),
-        _fmt(inputs.get("TK_dia")),
-        _fmt(inputs.get("Pulz")),
-        _fmt(inputs.get("E5")),  _fmt(inputs.get("D2")),
-        _fmt(inputs.get("K4")),  _fmt(inputs.get("H1")),
-        _fmt(inputs.get("K1")),  _fmt(inputs.get("P9")),
-        _fmt(inputs.get("E1")),  _fmt(inputs.get("N1")),
-        _fmt(inputs.get("P12")), _fmt(inputs.get("F9")),
-        _fmt(inputs.get("E3")),
-    ]
-
-# ── Google Sheets pripojenie (cachované) ──────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def _get_gsheet():
-    """Vráti worksheet Google Sheets. Vyžaduje secrets v Streamlit Cloud."""
-    if not GSPREAD_AVAILABLE:
-        return None
-    try:
-        creds = Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-        client = gspread.authorize(creds)
-        sheet  = client.open_by_key(st.secrets["gsheet_id"]).sheet1
-        # Hlavička – ak je list prázdny
-        if not sheet.get_all_values():
-            sheet.append_row(LOG_COLUMNS)
-        return sheet
-    except Exception:
-        return None
-
-def log_prediction(inputs, prob, risk_label, pohlavie_str):
-    """
-    Uloží predikciu do Google Sheets + CSV zálohy.
-    Vracia session_id (pre neskoršie doplnenie skutočného výsledku).
-    """
-    session_id = str(uuid.uuid4())[:8]
-    row = _build_row(session_id, inputs, prob, risk_label, pohlavie_str)
-
-    # ── Google Sheets ─────────────────────────────────────────────────────────
-    sheet = _get_gsheet()
-    if sheet is not None:
-        try:
-            sheet.append_row(row, value_input_option="USER_ENTERED")
-        except Exception:
-            pass
-
-    # ── CSV záloha ────────────────────────────────────────────────────────────
-    try:
-        file_exists = os.path.isfile(LOG_PATH)
-        with open(LOG_PATH, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(LOG_COLUMNS)
-            writer.writerow(row)
-    except Exception:
-        pass
-
-    return session_id
-
-def update_skutocny_vysledok(session_id, vysledok):
-    """
-    Nájde riadok podľa session_id a doplní skutočný výsledok HUTT testu.
-    Funguje pre Google Sheets aj CSV zálohu.
-    """
-    ok_sheet = False
-    # ── Google Sheets ─────────────────────────────────────────────────────────
-    sheet = _get_gsheet()
-    if sheet is not None:
-        try:
-            cell = sheet.find(session_id, in_column=1)
-            if cell:
-                sheet.update_cell(cell.row, _VYSLEDOK_COL, vysledok)
-                ok_sheet = True
-        except Exception:
-            pass
-
-    # ── CSV záloha ────────────────────────────────────────────────────────────
-    try:
-        if os.path.isfile(LOG_PATH):
-            rows = []
-            with open(LOG_PATH, "r", encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for r in reader:
-                    if r and r[0] == session_id:
-                        r[_VYSLEDOK_COL - 1] = vysledok
-                    rows.append(r)
-            with open(LOG_PATH, "w", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerows(rows)
-    except Exception:
-        pass
-
-    return ok_sheet
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# UI
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── HLAVIČKA ──────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="app-header">
-  <div style="font-size:2.4rem;">🫀</div>
-  <div>
-    <h1>Predikcia výsledku HUTT testu</h1>
-    <div class="subtitle">Rozhodovacia podpora pre klinického lekára · Head-Up Tilt Test</div>
-    <span class="badge">Random Forest · AUC 80.8 %</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# Disclaimer
-st.markdown("""
-<div class="disclaimer">
-  ⚠️ <strong>Len rozhodovacia podpora.</strong>
-  Finálne klinické rozhodnutie je vždy na lekárovi. Výsledok modelu nenahrádza klinické vyšetrenie.
-</div>
-""", unsafe_allow_html=True)
-
-# Načítanie modelu
-model, medians, feat_imp, cm = get_trained_model()
-if model is None:
-    st.error("❌ Model sa nenačítal – skontrolujte, či je súbor `data_full1.csv` v rovnakom priečinku ako `app.py`.")
+if not models_loaded:
+    st.error("Modely sa nenačítali. Skontrolujte súbory model_10d_*.joblib")
     st.stop()
 
-# ── FORMULÁR + VÝSLEDOK ───────────────────────────────────────────────────────
-col_form, col_result = st.columns([1.15, 0.85], gap="large")
+# ════════════════════════════════════════════════════════════════════════════
+# KROK 1 – ANAMNESTICKÉ ÚDAJE
+# ════════════════════════════════════════════════════════════════════════════
+st.markdown("---")
+st.markdown("## 🔵 Krok 1 — Anamnestické údaje")
+st.caption("Základné klinické merania dostupné pred HUTT testom")
 
-with col_form:
-    # ── Anamnestické údaje ────────────────────────────────────────────────────
-    st.markdown('<div class="card"><div class="card-title">📋 Anamnestické údaje</div>', unsafe_allow_html=True)
+col1, col2, col3 = st.columns(3)
+with col1:
+    pohlavie     = st.selectbox("Pohlavie", ["Žena", "Muž"])
+    pohlavie_enc = 1.0 if pohlavie == "Muž" else 0.0
+    vek          = st.number_input("Vek (roky)", min_value=1, max_value=110, value=45, step=1)
+with col2:
+    tk_sys = st.number_input("TK systolický (mmHg)", min_value=60, max_value=250, value=120, step=1)
+    tk_dia = st.number_input("TK diastolický (mmHg)", min_value=30, max_value=150, value=80, step=1)
+with col3:
+    pulz = st.number_input("Pulz (tepy/min)", min_value=20, max_value=200, value=70, step=1)
 
-    c1, c2, c3 = st.columns(3)
+btn_krok1 = st.button("🔍 Vypočítaj predbežný výsledok", type="primary",
+                       use_container_width=True)
+
+if btn_krok1:
+    X_ana = np.array([[pohlavie_enc, vek, tk_sys, tk_dia, pulz]])
+    prob_ana, pred_ana = predict(pkg_ana, X_ana)
+    st.session_state["prob_ana"]   = prob_ana
+    st.session_state["pred_ana"]   = pred_ana
+    st.session_state["ana_inputs"] = (pohlavie_enc, vek, tk_sys, tk_dia, pulz)
+    st.session_state["step2_open"] = False
+    st.session_state["step2_done"] = False
+
+# ── Zobraz výsledok Krok 1 ───────────────────────────────────────────────────
+if "prob_ana" in st.session_state:
+    prob_ana = st.session_state["prob_ana"]
+    pred_ana = st.session_state["pred_ana"]
+
+    _ana_name = pkg_ana.get('model_name', 'ExtraTrees')
+    st.markdown(f"### Predbežný výsledok — Anamnéza / {_ana_name}")
+    c1, c2 = st.columns([1, 2])
     with c1:
-        pohlavie     = st.selectbox("Pohlavie", ["Žena", "Muž"], label_visibility="visible")
-        pohlavie_enc = 1.0 if pohlavie == "Muž" else 0.0
+        st.markdown(gauge_html(prob_ana, f"Model: Anamnéza / {_ana_name}",
+                               f"prah={pkg_ana['threshold']:.2f} · 5 premenných",
+                               threshold=pkg_ana['threshold']),
+                    unsafe_allow_html=True)
+        st.markdown(verdict_html(prob_ana, threshold=pkg_ana['threshold']),
+                    unsafe_allow_html=True)
     with c2:
-        vek  = st.number_input("Vek (roky)", min_value=10, max_value=100, value=50, step=1)
-    with c3:
-        pulz = st.number_input("Pulz (bpm)", min_value=30, max_value=200, value=72, step=1)
-
-    c4, c5 = st.columns(2)
-    with c4:
-        tk_sys = st.number_input("TK systolický (mmHg)", min_value=60, max_value=250, value=120, step=1)
-    with c5:
-        tk_dia = st.number_input("TK diastolický (mmHg)", min_value=40, max_value=150, value=75, step=1)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # ── Dotazník – prepínače Áno / Nie ───────────────────────────────────────
-    st.markdown('<div class="card"><div class="card-title">📝 Dotazník pacienta</div>', unsafe_allow_html=True)
-    st.markdown("""
-<div class="info-box">
-Vyberte <strong>Áno</strong> alebo <strong>Nie</strong> pre každú otázku.
-Ak odpoveď nie je známa, nechajte <strong>—</strong> (systém doplní typickú hodnotu z datasetu).
-</div>
-""", unsafe_allow_html=True)
-
-    st.write("")  # malý priestor
-
-    dotaz_vals = {}
-    # Zobrazíme v 2 stĺpcoch pre úsporu miesta
-    q_left  = QUESTIONNAIRE[:6]
-    q_right = QUESTIONNAIRE[6:]
-
-    qa, qb = st.columns(2)
-    with qa:
-        for key, label in q_left:
-            v = st.radio(label, RADIO_OPTS, horizontal=True, key=key, index=0)
-            dotaz_vals[key] = radio_to_val(v)
-    with qb:
-        for key, label in q_right:
-            v = st.radio(label, RADIO_OPTS, horizontal=True, key=key, index=0)
-            dotaz_vals[key] = radio_to_val(v)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    predict_btn = st.button("🔍  Predikovať výsledok HUTT testu", use_container_width=True)
-
-
-# ── VÝSLEDKY ──────────────────────────────────────────────────────────────────
-with col_result:
-
-    if predict_btn:
-        inputs = {
-            "Pohlavie_enc": pohlavie_enc,
-            "Vek":   float(vek),
-            "TK_sys": float(tk_sys),
-            "TK_dia": float(tk_dia),
-            "Pulz":   float(pulz),
-            **dotaz_vals
-        }
-
-        prob = do_predict(inputs, model, medians)
-        pct  = prob * 100
-        needle_pct = min(max(int(pct), 0), 100)
-
-        # Risk level
-        if prob >= 0.60:
-            rc = "result-high";   rl = "🔴 Vysoké riziko synkopy"; rl_plain = "Vysoké"
-            rd = "Model predikuje <strong>pozitívny</strong> výsledok HUTT testu."
-            rr_cls = "rec-high"
-            rec  = "💊 <strong>Odporúčanie:</strong> Zvážte priame indikácie HUTT testu. " \
-                   "Výsledok naznačuje vasovagálnu synkopu – odporúča sa ďalšie kardiologické sledovanie."
-        elif prob >= 0.40:
-            rc = "result-medium"; rl = "🟡 Stredné riziko synkopy"; rl_plain = "Stredné"
-            rd = "Výsledok je <strong>neistý</strong> – odporúča sa klinické zváženie."
-            rr_cls = "rec-medium"
-            rec  = "🩺 <strong>Odporúčanie:</strong> Doplňte klinické vyšetrenie. " \
-                   "Výsledok je hraničný, rozhodnutie závisí od ďalšieho kontextu pacienta."
-        else:
-            rc = "result-low";    rl = "🟢 Nízke riziko synkopy"; rl_plain = "Nízke"
-            rd = "Model predikuje <strong>negatívny</strong> výsledok HUTT testu."
-            rr_cls = "rec-low"
-            rec  = "✅ <strong>Odporúčanie:</strong> Nízka pravdepodobnosť synkopy. " \
-                   "Zvážte alternatívne príčiny straty vedomia."
-
-        # ── Záznam do logu ────────────────────────────────────────────────────
-        try:
-            sid = log_prediction(inputs, prob, rl_plain, pohlavie)
-            st.session_state["last_sid"] = sid
-            st.caption("💾 Predikcia zaznamenaná do logu.")
-        except Exception as log_err:
-            st.session_state["last_sid"] = None
-            st.caption(f"⚠️ Log sa neuložil: {log_err}")
-
-        # Výsledkový box
-        st.markdown(f"""
-<div class="result-box {rc}">
-  <div class="result-prob">{pct:.1f}&nbsp;%</div>
-  <div class="result-label">{rl}</div>
-  <div class="result-desc">{rd}</div>
-</div>
-""", unsafe_allow_html=True)
-
-        # Gauge lišta s ihlou
-        st.markdown(f"""
-<div class="gauge-wrap">
-  <div class="gauge-track">
-    <div class="gauge-needle" style="left:{needle_pct}%;"></div>
-  </div>
-  <div class="gauge-labels">
-    <span>0 % – Nízke</span>
-    <span>40 %</span>
-    <span>60 %</span>
-    <span>Vysoké – 100 %</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-        # Klinické odporúčanie
-        st.markdown(f'<div class="rec-box {rr_cls}">{rec}</div>', unsafe_allow_html=True)
-
-        # ── Výsledok HUTT testu (doplniť po vyšetrení) ───────────────────────
         st.markdown("""
-<div style="background:#F8FAFF; border:1.5px dashed #90B8E8; border-radius:10px;
-            padding:14px 18px; margin:10px 0 6px 0;">
-  <div style="font-size:0.82rem; font-weight:700; color:#0D47A1;
-              text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
-    ✏️ Výsledok HUTT testu (vyplňte po vyšetrení)
-  </div>
-  <div style="font-size:0.82rem; color:#666; margin-bottom:6px;">
-    Vyberte skutočný výsledok a stlačte <strong>Zapísať</strong> –
-    doplní sa do záznamu tohto pacienta.
-  </div>
-</div>
-""", unsafe_allow_html=True)
+        <div style='padding:12px; background:#f0f4f8; border-radius:8px; margin-top:10px;'>
+        <b>Čo tento výsledok znamená?</b><br><br>
+        Model vypočítal <b>orientačné modelové skóre</b> na základe
+        <b>5 základných klinických meraní</b> (vek, pohlavie, TK, pulz).<br><br>
+        Skóre nie je klinicky validovaná pravdepodobnosť — ide o výskumný
+        odhad. Pre spresnenie môžete v <b>Kroku 2</b> doplniť dotazník
+        o symptómoch pacienta.
+        </div>
+        """, unsafe_allow_html=True)
 
-        vysledok_opts = ["— nevyplnené —", "Pozitívny (synkopa nastala)",
-                         "Negatívny (synkopa nenastala)"]
-        vysledok_sel = st.radio(
-            "Skutočný výsledok HUTT testu:",
-            vysledok_opts,
-            horizontal=True,
-            key="vysledok_radio",
-            label_visibility="collapsed"
-        )
-        if st.button("✅  Zapísať výsledok do logu", key="btn_vysledok",
-                     disabled=(vysledok_sel == "— nevyplnené —")):
-            sid = st.session_state.get("last_sid")
-            if sid:
-                val = "Pozitívny" if "Pozitívny" in vysledok_sel else "Negatívny"
-                update_skutocny_vysledok(sid, val)
-                st.success(f"✅ Výsledok **{val}** bol zapísaný do záznamu.")
-            else:
-                st.warning("⚠️ ID záznamu sa nenašlo – výsledok sa nedal doplniť.")
-
-        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
-
-        # ── Výkonnostné metriky ───────────────────────────────────────────────
-        sens_val = (cm['TP'] / (cm['TP'] + cm['FN']) * 100) if (cm['TP'] + cm['FN']) > 0 else 0.0
-        spec_val = (cm['TN'] / (cm['TN'] + cm['FP']) * 100) if (cm['TN'] + cm['FP']) > 0 else 0.0
-
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.markdown('<div class="m-card"><div class="m-val">80.8%</div><div class="m-label">AUC (CV)</div></div>', unsafe_allow_html=True)
-        with m2:
-            st.markdown(f'<div class="m-card"><div class="m-val">{sens_val:.1f}%</div><div class="m-label">Senzitivita</div></div>', unsafe_allow_html=True)
-        with m3:
-            st.markdown(f'<div class="m-card"><div class="m-val">{spec_val:.1f}%</div><div class="m-label">Špecificita</div></div>', unsafe_allow_html=True)
-
-        # ── Detaily modelu v expanderi ────────────────────────────────────────
-        with st.expander("📈 Detaily modelu (pre výskum)"):
-            st.markdown("**Dôležitosť atribútov (top 8)**")
-            if feat_imp and max(feat_imp.values()) > 0:
-                top_fi = sorted(feat_imp.items(), key=lambda x: -x[1])[:8]
-                max_fi = top_fi[0][1]
-                for feat, imp in top_fi:
-                    label = FEATURE_LABELS.get(feat, feat)
-                    bar_w = int(imp / max_fi * 100) if max_fi > 0 else 0
-                    st.markdown(
-                        f"<div class='fi-row'>"
-                        f"<span class='fi-label'>{label}</span>"
-                        f"<div class='fi-track'><div class='fi-bar' style='width:{bar_w}%;'></div></div>"
-                        f"<span class='fi-val'>{imp:.3f}</span>"
-                        f"</div>", unsafe_allow_html=True)
-
-            n_te = cm.get('n', cm['TP'] + cm['FP'] + cm['FN'] + cm['TN'])
-            st.markdown(f"\n**Konfúzna matica** (testovacia sada, n={n_te})")
-            st.markdown(f"""
-| | Predik. synkopa | Predik. bez synkopy |
-|---|:---:|:---:|
-| **Skutočná synkopa** | TP = {cm['TP']} | FN = {cm['FN']} |
-| **Bez synkopy** | FP = {cm['FP']} | TN = {cm['TN']} |
-""")
-            n_pos = cm['TP'] + cm['FN']
-            st.markdown(f"""
-<div class="info-box">
-Model prehliadne <strong>{cm['FN']}</strong> zo <strong>{n_pos}</strong> skutočných synkop (FN).
-Falošných poplachov: <strong>{cm['FP']}</strong>.
-</div>""", unsafe_allow_html=True)
-
+    # ── Farebná interpretácia ────────────────────────────────────────────────
+    pct = int(prob_ana * 100)
+    _band_ana, _ = score_band(prob_ana, pkg_ana['threshold'])
+    if _band_ana == "zvýšené":
+        st.error(f"🔴 Zvýšené modelové skóre ({pct}%) — klinické posúdenie odporúčané")
+    elif _band_ana == "hraničné":
+        st.warning(f"🟠 Hraničné modelové skóre ({pct}%) — výsledok je neistý, zvážte doplňujúce vyšetrenie")
     else:
-        # Prázdny stav – návod
-        st.markdown("""
-<div class="card" style="text-align:center; padding: 36px 22px;">
-  <div style="font-size:3rem; margin-bottom:12px;">🩺</div>
-  <div style="font-size:1.05rem; font-weight:600; color:#0D47A1; margin-bottom:8px;">
-    Ako začať
-  </div>
-  <div style="font-size:0.9rem; color:#555; line-height:1.7;">
-    1. Zadajte <strong>anamnestické údaje</strong> pacienta<br>
-    2. Označte odpovede z <strong>dotazníka</strong> (Áno / Nie)<br>
-    3. Stlačte <strong>Predikovať</strong><br>
-    4. Prečítajte <strong>výsledok</strong> a odporúčanie
-  </div>
-</div>
-""", unsafe_allow_html=True)
+        st.success(f"🟢 Nízke modelové skóre ({pct}%) — nižší orientačný odhad rizika pozitívneho HUTT testu")
 
-        # Informácie o modeli
-        st.markdown("""
-<div class="card">
-  <div class="card-title">ℹ️ O modeli</div>
-  <div style="font-size:0.88rem; color:#444; line-height:1.7;">
-    <strong>Algoritmus:</strong> Random Forest (200 stromov)<br>
-    <strong>Dataset:</strong> 371 pacientov · HUTT test<br>
-    <strong>Tréning:</strong> 5-fold krížová validácia<br>
-    <strong>Cieľová premenná:</strong> Synkopa (0 = nie, 1 = áno)<br>
-    <strong>Vstupné dáta:</strong> Anamnéza + dotazník (16 atribútov)
-  </div>
-</div>
-""", unsafe_allow_html=True)
+    # ════════════════════════════════════════════════════════════════════════
+    # PRECHOD NA KROK 2
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
 
-# ── FOOTER ────────────────────────────────────────────────────────────────────
-st.markdown("""
-<hr style="border:none;border-top:1px solid #DDE3EE;margin:20px 0 10px 0;">
-<div style="text-align:center;font-size:0.78rem;color:#AAB;">
-  Predikcia synkopy · Random Forest · AUC CV 80.8 % · Senzitivita 92.7 % ·
-  <em>Len pre výskumné a edukačné účely</em>
-</div>
-""", unsafe_allow_html=True)
+    col_btn1, col_btn2 = st.columns([2, 1])
+    with col_btn1:
+        st.markdown("### 🟢 Krok 2 — Spresnenie pomocou dotazníka")
+        _kom_name = pkg_kom.get('model_name', 'RF')
+        st.caption(f"Doplňte {N_DOT} otázok o symptómoch → model Kombinácia / {_kom_name}")
+    with col_btn2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        btn_open2 = st.button("📝 Otvoriť dotazník", use_container_width=True)
+        if btn_open2:
+            st.session_state["step2_open"] = True
+
+# ════════════════════════════════════════════════════════════════════════════
+# KROK 2 – DOTAZNÍK
+# ════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("step2_open") and "prob_ana" in st.session_state:
+
+    st.markdown("---")
+    st.markdown(f"## 🟢 Krok 2 — Dotazníkové otázky ({N_DOT} otázok)")
+    st.caption(
+        "Odpovede: ✅ = Áno · ☐ = Nie · ❓ = Neznáme  |  "
+        "Neznáme hodnoty sú nahradené mediánom z trénovacej vzorky (n=290). "
+        "Pri väčšom počte neznámych odpovedí je výsledok menej spoľahlivý."
+    )
+
+    # Špeciálne inputy pre ne-binárne premenné (vek / počet)
+    # C1 a C4: v tréningových dátach nikdy neboli neznáme → odporúčané vždy vyplniť
+    # C2: 82/290 prípadov bolo neznámych (-1) → prázdne = imputácia mediánom (OK)
+    NUMERIC_INPUTS = {
+        "C1": {"label": "C1 – Vek pri prvom výskyte ťažkostí (roky)",
+               "min": 1, "max": 100, "default": 1, "step": 1},
+        "C2": {"label": "C2 – Celkový počet odpadnutí (prázdne = neznáme)",
+               "min": 0, "max": 200, "default": None, "step": 1},
+        "C4": {"label": "C4 – Vek v období najhorších ťažkostí (roky)",
+               "min": 1, "max": 100, "default": 1, "step": 1},
+    }
+    NUMERIC_KEYS = set(NUMERIC_INPUTS.keys())
+
+    st.caption("💡 **Návod:** Ak symptóm nebol prítomný → zvoľte **Nie**. "
+               "Ak informácia nie je dostupná → zvoľte **Neznáme** (hodnota bude doplnená imputáciou). "
+               "Číselné polia C1, C2, C4 ponechajte prázdne ak hodnota nie je známa.")
+
+    dotaznik_vals = {}
+    cols = st.columns(2)
+    for i, kod in enumerate(SELECTED_DOT):
+        with cols[i % 2]:
+            if kod in NUMERIC_INPUTS:
+                cfg = NUMERIC_INPUTS[kod]
+                val = st.number_input(cfg["label"], min_value=cfg["min"],
+                                      max_value=cfg["max"], value=cfg["default"],
+                                      step=cfg["step"], key=f"q2_{kod}")
+                # None = prázdne pole = neznáme → posielame NaN (analýza robí -1→NaN pred tréningom)
+                dotaznik_vals[kod] = float(val) if val is not None else np.nan
+            else:
+                label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
+                dotaznik_vals[kod] = tristate(label, f"q2_{kod}")
+
+    # ── Counter vyplnenosti ──────────────────────────────────────────────────
+    n_vyplnene = vyplnenost(dotaznik_vals, NUMERIC_KEYS)
+    n_nezname  = N_DOT - n_vyplnene
+    fill_pct   = int(n_vyplnene / N_DOT * 100)
+    if n_nezname == 0:
+        st.success(f"✅ Dotazník vyplnený: **{n_vyplnene}/{N_DOT}** otázok ({fill_pct}%)")
+    elif n_nezname <= N_DOT * 0.3:
+        st.info(f"ℹ️ Vyplnených: **{n_vyplnene}/{N_DOT}** otázok — "
+                f"{n_nezname} neznámych hodnôt bude imputovaných mediánom.")
+    else:
+        st.warning(f"⚠️ Vyplnených iba **{n_vyplnene}/{N_DOT}** otázok ({fill_pct}%) — "
+                   f"veľa neznámych hodnôt ({n_nezname}). Výsledok interpretujte opatrne.")
+
+    st.markdown("---")
+    btn_krok2 = st.button("🎯 Spresniť výsledok", type="primary",
+                           use_container_width=True)
+
+    if btn_krok2:
+        pohlavie_enc, vek, tk_sys, tk_dia, pulz = st.session_state["ana_inputs"]
+        X_kom = build_kom_input(pohlavie_enc, vek, tk_sys, tk_dia, pulz, dotaznik_vals)
+        prob_kom, pred_kom = predict(pkg_kom, X_kom)
+
+        st.session_state["prob_kom"]      = prob_kom
+        st.session_state["pred_kom"]      = pred_kom
+        st.session_state["dotaznik_vals"] = dotaznik_vals
+        st.session_state["n_vyplnene"]    = n_vyplnene
+        st.session_state["step2_done"]    = True
+
+# ════════════════════════════════════════════════════════════════════════════
+# FINÁLNY VÝSLEDOK – POROVNANIE OBOCH MODELOV
+# ════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("step2_done"):
+    prob_ana    = st.session_state["prob_ana"]
+    pred_ana    = st.session_state["pred_ana"]
+    prob_kom    = st.session_state["prob_kom"]
+    pred_kom    = st.session_state["pred_kom"]
+    n_vyplnene  = st.session_state.get("n_vyplnene", N_DOT)
+    dot_vals    = st.session_state.get("dotaznik_vals", {})
+
+    st.markdown("---")
+    st.markdown("## 🎯 Finálny výsledok — Porovnanie modelov")
+
+    c1, mid, c2 = st.columns([5, 1, 5])
+
+    with c1:
+        st.markdown(gauge_html(prob_ana, "🟦 Anamnéza / ExtraTrees",
+                               f"prah={pkg_ana['threshold']:.2f} · 5 premenných",
+                               threshold=pkg_ana['threshold']),
+                    unsafe_allow_html=True)
+        st.markdown(verdict_html(prob_ana, threshold=pkg_ana['threshold']),
+                    unsafe_allow_html=True)
+        st.caption(f"AUC_CV = {pkg_ana['AUC_CV']}% ± {pkg_ana.get('AUC_CV_std','?')}%  ·  "
+                   f"Senzitivita=93% · Špecificita=42%")
+
+    with mid:
+        st.markdown("<br><br><div style='text-align:center;font-size:1.8em;'>⟷</div>",
+                    unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(gauge_html(prob_kom, "🟩 Kombinácia / RF",
+                               f"prah={pkg_kom['threshold']:.2f} · 5+{N_DOT} premenných",
+                               threshold=pkg_kom['threshold']),
+                    unsafe_allow_html=True)
+        st.markdown(verdict_html(prob_kom, threshold=pkg_kom['threshold']),
+                    unsafe_allow_html=True)
+        st.caption(f"AUC_CV = {pkg_kom['AUC_CV']}% ± {pkg_kom.get('AUC_CV_std','?')}%  ·  "
+                   f"Senzitivita=95% · Špecificita=45%  ·  "
+                   f"dotazník: {n_vyplnene}/{N_DOT} otázok vyplnených")
+
+    # ── Rizikové faktory (odpovede Áno) ──────────────────────────────────────
+    rizikove = [OTAZKY.get(kod, kod) for kod, val in dot_vals.items() if val == 1.0]
+    if rizikove:
+        with st.expander(f"⚠️ Faktory zadané ako ÁNO ({len(rizikove)}/{N_DOT})", expanded=True):
+            st.markdown("Pacient potvrdil prítomnosť nasledujúcich príznakov/stavov:")
+            for item in rizikove:
+                st.markdown(f"- {item}")
+            st.caption("Tieto odpovede vstupujú do modelu ako pozitívne signály. "
+                       "Klinická interpretácia zostáva na lekárovi.")
+
+    # ── Zhoda modelov ────────────────────────────────────────────────────────
+    st.markdown("---")
+    band_ana = score_band(prob_ana, threshold=pkg_ana['threshold'])[0]
+    band_kom = score_band(prob_kom, threshold=pkg_kom['threshold'])[0]
+    if band_ana == band_kom:
+        st.success(f"✅ Oba modely sa **zhodujú** — pásmo: **{band_kom}**")
+    else:
+        st.warning(
+            f"⚠️ Modely sa **nezhodujú** — Anamnéza: **{band_ana}** · Kombinácia: **{band_kom}**\n\n"
+            "Kombinovaný model má doplňujúci charakter a zohľadňuje symptómy z dotazníka. "
+            "Pri rozdielnych výsledkoch zvážte oba pohľady; konečné rozhodnutie ostáva na lekárovi."
+        )
+
+    # ── Zmena skóre ─────────────────────────────────────────────────────────
+    delta = prob_kom - prob_ana
+    delta_pct = int(abs(delta) * 100)
+    if abs(delta) >= 0.05:
+        smer = "zvýšil" if delta > 0 else "znížil"
+        st.info(f"📊 Dotazník {smer} modelové skóre o **{delta_pct} pp** "
+                f"({int(prob_ana*100)}% → {int(prob_kom*100)}%)")
+    else:
+        st.info(f"📊 Dotazník zmenil modelové skóre len minimálne ({delta_pct} pp) — "
+                "oba modely sú konzistentné.")
+
+    # ── Vizualizácie ─────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📊 Doplňujúce grafy")
+
+    _v1, _v2 = st.columns(2)
+
+    # ── Graf 1: Distribúcia skóre ─────────────────────────────────────────────
+    with _v1:
+        st.markdown("**Distribúcia modelového skóre (trénovacie dáta)**")
+        st.caption("Kde sa váš pacient nachádza oproti HUTT+ a HUTT− pacientom z trénovacej vzorky")
+
+        _pos = pkg_kom.get("train_proba_pos", [])
+        _neg = pkg_kom.get("train_proba_neg", [])
+
+        if _pos and _neg:
+            _fig, _ax = plt.subplots(figsize=(5, 3.2))
+            _bins = np.linspace(0, 1, 21)
+            _ax.hist(_neg, bins=_bins, alpha=0.6, color="#27ae60", label=f"HUTT− (n={len(_neg)})",
+                     density=True, edgecolor="white", linewidth=0.5)
+            _ax.hist(_pos, bins=_bins, alpha=0.6, color="#e74c3c", label=f"HUTT+ (n={len(_pos)})",
+                     density=True, edgecolor="white", linewidth=0.5)
+            _ax.axvline(prob_kom, color="#2c3e50", linewidth=2.5, linestyle="--",
+                        label=f"Váš pacient ({int(prob_kom*100)}%)")
+            _ax.axvline(pkg_kom["threshold"], color="#e67e22", linewidth=1.5, linestyle=":",
+                        label=f"Prah ({int(pkg_kom['threshold']*100)}%)")
+            _ax.set_xlabel("Modelové skóre")
+            _ax.set_ylabel("Hustota")
+            _ax.legend(fontsize=8, loc="upper center")
+            _ax.set_xlim(0, 1)
+            _ax.spines[['top','right']].set_visible(False)
+            _fig.tight_layout()
+            st.pyplot(_fig, use_container_width=True)
+            plt.close(_fig)
+        else:
+            st.info("Distribučné dáta nie sú dostupné (pretrénujte model).")
+
+    # ── Graf 2: Tabuľka prahov ────────────────────────────────────────────────
+    with _v2:
+        st.markdown("**Senzitivita / Špecificita pri rôznych prahoch**")
+        st.caption("Ako sa mení záchytnosť a špecificita modelu pri zmene rozhodovacieho prahu")
+
+        _prah_data = pkg_kom.get("prah_table", [])
+        if _prah_data:
+            _prah_df = pd.DataFrame(_prah_data)
+            # Vyber kľúčové prahy
+            _show_thrs = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+            _prah_df["thr_r"] = _prah_df["Prah"].round(2)
+            _prah_filt = _prah_df[_prah_df["thr_r"].isin(_show_thrs)].copy()
+            _prah_filt = _prah_filt[["thr_r", "Sens_%", "Spec_%", "FN", "FP"]].rename(columns={
+                "thr_r":  "Prah",
+                "Sens_%": "Sens %",
+                "Spec_%": "Spec %",
+                "FN":     "FN",
+                "FP":     "FP"
+            })
+
+            # Zvýrazni odporúčaný prah
+            _thr_r = round(pkg_kom["threshold"], 2)
+
+            def _highlight_row(row):
+                if round(row["Prah"], 2) == _thr_r:
+                    return ["background-color: #fff3cd; font-weight: bold"] * len(row)
+                return [""] * len(row)
+
+            st.dataframe(
+                _prah_filt.style.apply(_highlight_row, axis=1),
+                use_container_width=True, hide_index=True
+            )
+            st.caption(f"🟡 Žltý riadok = odporúčaný prah ({_thr_r}) · "
+                       f"FN = zmeškaní HUTT+ · FP = zbytočné HUTT testy")
+        else:
+            st.info("Tabuľka prahov nie je dostupná (pretrénujte model).")
+
+    # ── Model Card ───────────────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("📄 Model Card – informácie o modeli"):
+        _auc_ana  = pkg_ana.get('AUC_CV', '?')
+        _auc_kom  = pkg_kom.get('AUC_CV', '?')
+        _thr_ana  = pkg_ana.get('threshold', '?')
+        _thr_kom  = pkg_kom.get('threshold', '?')
+        _n_feat   = N_ANA + N_DOT
+        _thr_note = pkg_kom.get('threshold_note', '')
+        st.markdown(f"""
+**Cieľ modelu:** Orientačný odhad pravdepodobnosti pozitívneho výsledku HUTT testu
+(tilt-table test) u pacientov s anamnézou krátkodobej straty vedomia (synkopy).
+
+**Trénovacie dáta:** n=371 pacientov, jedno centrum (SR), retrospektívna štúdia.
+Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
+
+**Modely:**
+- Anamnéza: {pkg_ana.get('model_name','ExtraTrees')} · AUC_CV={_auc_ana}% ± {pkg_ana.get('AUC_CV_std','?')}% · {N_ANA} premenných · prah={_thr_ana:.2f}
+- Kombinácia: {pkg_kom.get('model_name','RF')} · AUC_CV={_auc_kom}% ± {pkg_kom.get('AUC_CV_std','?')}% · {_n_feat} premenných · prah={_thr_kom:.2f}
+
+**Výber prahu:** {_thr_note}
+
+**Výstup:** Modelové skóre (0–100%). Nejde o klinicky kalibrovanú pravdepodobnosť.
+Skóre nad prahom = orientačný signál pre zvýšenú pozornosť, nie diagnóza.
+
+**Limitácie:**
+- Interná validácia na jednom centre — externá validácia chýba
+- Nested CV prebiehal na trénovacej časti dát (n≈297) kvôli zachovaniu held-out test setu
+- Malý dataset (n=371), možný model selection bias pre modely bez nested CV
+- Kalibrácia skóre nebola overená prospektívne
+
+**Zakázané použitie:**
+- Nesmie byť použitý ako jediný základ pre diagnostické rozhodnutie
+- Nenahradzuje klinické vyšetrenie ani rozhodnutie lekára
+- Nie je určený pre použitie mimo výskumného kontextu bez externej validácie
+        """)
+
+    # ── Disclaimer ───────────────────────────────────────────────────────────
+    st.info(
+        "ℹ️ Výstup je **výskumný prototyp rozhodovacej podpory**, nie klinicky validovaný "
+        "diagnostický nástroj. Číselné skóre nie je kalibráciou overená pravdepodobnosť. "
+        "Modely boli validované interne na n=371 pacientoch z jedného centra (n_test=74). "
+        "Externá validácia chýba. Výsledok **nenahradzuje klinické rozhodnutie lekára**."
+    )
+
+    # ── Súhrn vstupov (pre spätnú väzbu) ────────────────────────────────────
+    with st.expander("📋 Zobraz všetky zadané údaje pacienta"):
+        pohlavie_enc, vek, tk_sys, tk_dia, pulz = st.session_state["ana_inputs"]
+        df_vstup = pd.DataFrame({
+            "Premenná": ["Pohlavie", "Vek", "TK systolický", "TK diastolický", "Pulz"],
+            "Hodnota":  ["Muž" if pohlavie_enc == 1 else "Žena",
+                         f"{vek} rokov", f"{tk_sys} mmHg", f"{tk_dia} mmHg",
+                         f"{pulz} tep/min"]
+        })
+        st.table(df_vstup.set_index("Premenná"))
+
+        if dot_vals:
+            st.markdown(f"**Dotazník ({n_vyplnene}/{N_DOT} vyplnených):**")
+            dot_display = []
+            for kod, val in dot_vals.items():
+                label = OTAZKY.get(kod, kod)
+                if kod in {"C1", "C2", "C4"}:
+                    ans = str(int(val)) if (val is not None and not np.isnan(float(val))) else "Neznáme"
+                else:
+                    ans = "Áno" if val == 1.0 else ("Nie" if val == 0.0 else "Neznáme")
+                dot_display.append({"Otázka": label, "Odpoveď": ans})
+            st.table(pd.DataFrame(dot_display).set_index("Otázka"))
+
+# ── Footer ────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.caption("Bakalárska práca · 2025/2026 · Python 3 · Streamlit")
