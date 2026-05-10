@@ -234,8 +234,6 @@ def score_band(prob, threshold=0.45):
     elif prob >= threshold - _BAND_MARGIN: return "hraničné", "#e67e22"
     else:                                  return "nízke",    "#27ae60"
 
-def prob_color(prob, threshold=0.45):
-    return score_band(prob, threshold)[1]
 
 def gauge_html(prob, label, subtext="", threshold=0.45):
     pct  = int(prob * 100)
@@ -466,20 +464,41 @@ if st.session_state.get("step2_open") and "prob_ana" in st.session_state:
                "Ak informácia nie je dostupná → zvoľte **Neznáme** (hodnota bude doplnená imputáciou). "
                "Číselné polia C1, C2, C4 ponechajte prázdne ak hodnota nie je známa.")
 
+    # ── Bloková štruktúra otázok ─────────────────────────────────────────────
+    BLOKY = {
+        "C – Vznik ťažkostí":                    ["C1", "C2", "C4"],
+        "D – Situácie vedúce k synkope":          ["D2"],
+        "E – Faktory vedúce k strate vedomia":    ["E", "E1", "E4", "E5", "E7"],
+        "F – Špecifické situácie":                ["F1", "F2", "F4"],
+        "H – Symptómy pred stratou vedomia":      ["H", "H1", "H3", "H5", "H13"],
+        "I – Trvanie symptómov pred synkopou":    ["I1", "I2"],
+        "K – Trvanie bezvedomia (podľa svedkov)": ["K", "K4"],
+        "N – Stav po prebudení":                  ["N1", "N6"],
+        "O – Rodinná anamnéza":                   ["O1"],
+        "P – Osobná anamnéza":                    ["P5", "P9", "P18", "P27", "P31", "P33"],
+    }
+
     dotaznik_vals = {}
-    cols = st.columns(2)
-    for i, kod in enumerate(SELECTED_DOT):
-        with cols[i % 2]:
-            if kod in NUMERIC_INPUTS:
-                cfg = NUMERIC_INPUTS[kod]
-                val = st.number_input(cfg["label"], min_value=cfg["min"],
-                                      max_value=cfg["max"], value=cfg["default"],
-                                      step=cfg["step"], key=f"q2_{kod}")
-                # None = prázdne pole = neznáme → posielame NaN (analýza robí -1→NaN pred tréningom)
-                dotaznik_vals[kod] = float(val) if val is not None else np.nan
-            else:
-                label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
-                dotaznik_vals[kod] = tristate(label, f"q2_{kod}")
+    for blok_nazov, kody in BLOKY.items():
+        # vyfiltruj len tie kódy ktoré sú skutočne v SELECTED_DOT
+        kody_v_modeli = [k for k in kody if k in SELECTED_DOT]
+        if not kody_v_modeli:
+            continue
+        st.markdown(f"**{blok_nazov}**")
+        cols = st.columns(2)
+        for i, kod in enumerate(kody_v_modeli):
+            with cols[i % 2]:
+                if kod in NUMERIC_INPUTS:
+                    cfg = NUMERIC_INPUTS[kod]
+                    val = st.number_input(cfg["label"], min_value=cfg["min"],
+                                          max_value=cfg["max"], value=cfg["default"],
+                                          step=cfg["step"], key=f"q2_{kod}")
+                    # None = prázdne pole = neznáme → NaN (analýza robí -1→NaN pred tréningom)
+                    dotaznik_vals[kod] = float(val) if val is not None else np.nan
+                else:
+                    label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
+                    dotaznik_vals[kod] = tristate(label, f"q2_{kod}")
+        st.markdown("")  # malá medzera medzi blokmi
 
     # ── Counter vyplnenosti ──────────────────────────────────────────────────
     n_vyplnene = vyplnenost(dotaznik_vals, NUMERIC_KEYS)
@@ -533,7 +552,7 @@ if st.session_state.get("step2_done"):
         st.markdown(verdict_html(prob_ana, threshold=pkg_ana['threshold']),
                     unsafe_allow_html=True)
         st.caption(f"AUC_CV = {pkg_ana['AUC_CV']}% ± {pkg_ana.get('AUC_CV_std','?')}%  ·  "
-                   f"Senzitivita=93% · Špecificita=42%")
+                   f"Senzitivita=93% · Špecificita=23%")
 
     with mid:
         st.markdown("<br><br><div style='text-align:center;font-size:1.8em;'>⟷</div>",
