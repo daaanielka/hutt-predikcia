@@ -28,8 +28,8 @@ st.set_page_config(
 
 # ── Cesty k modelom ─────────────────────────────────────────────────────────
 BASE     = os.path.dirname(os.path.abspath(__file__))
-PATH_ANA = os.path.join(BASE, "model_10d_anamneza.joblib")
-PATH_KOM = os.path.join(BASE, "model_10d_kombinacia.joblib")
+PATH_ANA = os.path.join(BASE, "model_10f_anamneza.joblib")
+PATH_KOM = os.path.join(BASE, "model_10f_kombinacia.joblib")
 
 REQUIRED_KEYS = {"pipeline", "features", "threshold", "model_name", "AUC_CV"}
 
@@ -42,7 +42,7 @@ def load_models():
         missing = REQUIRED_KEYS - set(pkg.keys())
         if missing:
             raise ValueError(f"Model {label} neobsahuje kľúče: {missing}. "
-                             f"Pretrénujte model (10d_hutt_predikcia.py).")
+                             f"Pretrénujte model (10f_hutt_predikcia.py).")
     return ana, kom
 
 try:
@@ -348,7 +348,7 @@ Výstup je výskumný prototyp — nenahradzuje klinické rozhodnutie.
 """)
 
 if not models_loaded:
-    st.error("Modely sa nenačítali. Skontrolujte súbory model_10d_*.joblib")
+    st.error("Modely sa nenačítali. Skontrolujte súbory model_10f_*.joblib")
     st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════
