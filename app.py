@@ -338,6 +338,12 @@ with st.sidebar:
     ⚠️ *Orientačný prototyp.
     Nenahradzuje klinické rozhodnutie.*
     """)
+    st.markdown("---")
+    if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
+        for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_open",
+                    "step2_done", "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
+            st.session_state.pop(key, None)
+        st.rerun()
 
 # ── Hlavička ─────────────────────────────────────────────────────────────────
 st.title("🫀 Predikcia výsledku HUTT testu")
@@ -743,6 +749,15 @@ Skóre nad prahom = orientačný signál pre zvýšenú pozornosť, nie diagnóz
                     ans = "Áno" if val == 1.0 else ("Nie" if val == 0.0 else "Neznáme")
                 dot_display.append({"Otázka": label, "Odpoveď": ans})
             st.table(pd.DataFrame(dot_display).set_index("Otázka"))
+
+    # ── Nový pacient ─────────────────────────────────────────────────────────
+    st.markdown("---")
+    if st.button("🔄 Nový pacient — vymazať výsledky a začať odznova",
+                 use_container_width=True):
+        for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_open",
+                    "step2_done", "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
+            st.session_state.pop(key, None)
+        st.rerun()
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
