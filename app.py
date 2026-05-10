@@ -361,7 +361,7 @@ if not models_loaded:
 # KROK 1 – ANAMNESTICKÉ ÚDAJE
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("---")
-st.markdown("## 🔵 Krok 1 — Anamnestické údaje")
+st.markdown("## Krok 1 — Anamnestické údaje")
 st.caption("Základné klinické merania dostupné pred HUTT testom")
 
 col1, col2, col3 = st.columns(3)
@@ -414,16 +414,6 @@ if "prob_ana" in st.session_state:
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Farebná interpretácia ────────────────────────────────────────────────
-    pct = int(prob_ana * 100)
-    _band_ana, _ = score_band(prob_ana, pkg_ana['threshold'])
-    if _band_ana == "zvýšené":
-        st.error(f"🔴 Zvýšené modelové skóre ({pct}%) — klinické posúdenie odporúčané")
-    elif _band_ana == "hraničné":
-        st.warning(f"🟠 Hraničné modelové skóre ({pct}%) — výsledok je neistý, zvážte doplňujúce vyšetrenie")
-    else:
-        st.success(f"🟢 Nízke modelové skóre ({pct}%) — nižší orientačný odhad rizika pozitívneho HUTT testu")
-
     # ════════════════════════════════════════════════════════════════════════
     # PRECHOD NA KROK 2
     # ════════════════════════════════════════════════════════════════════════
@@ -431,7 +421,7 @@ if "prob_ana" in st.session_state:
 
     col_btn1, col_btn2 = st.columns([2, 1])
     with col_btn1:
-        st.markdown("### 🟢 Krok 2 — Spresnenie pomocou dotazníka")
+        st.markdown("### Krok 2 — Spresnenie pomocou dotazníka")
         _kom_name = pkg_kom.get('model_name', 'RF')
         st.caption(f"Doplňte {N_DOT} otázok o symptómoch → model Kombinácia / {_kom_name}")
     with col_btn2:
@@ -446,7 +436,7 @@ if "prob_ana" in st.session_state:
 if st.session_state.get("step2_open") and "prob_ana" in st.session_state:
 
     st.markdown("---")
-    st.markdown(f"## 🟢 Krok 2 — Dotazníkové otázky ({N_DOT} otázok)")
+    st.markdown(f"## Krok 2 — Dotazníkové otázky ({N_DOT} otázok)")
     st.caption(
         "Odpovede: ✅ = Áno · ☐ = Nie · ❓ = Neznáme  |  "
         "Neznáme hodnoty sú nahradené mediánom z trénovacej vzorky (n=290). "
