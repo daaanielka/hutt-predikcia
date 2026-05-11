@@ -332,39 +332,31 @@ def vyplnenost(dotaznik_vals, numeric_keys):
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/heart-with-pulse.png", width=65)
     st.title("HUTT Prediktor")
-    st.markdown(f"""
-    **Predikcia výsledku HUTT testu**
-    Bakalárska práca · 2025/2026
+    st.caption("Bakalárska práca · 2025/2026")
+    st.markdown("---")
+    st.markdown("""
+**Ako postupovať:**
 
-    ---
-    **Dvojkrokový prístup:**
+**1️⃣ Anamnéza**
+Zadajte vek, pohlavie, TK a pulz.
+Stlačte *Vypočítaj predbežný výsledok*.
 
-    **Krok 1** – Anamnéza *(5 polí)*
-    Rýchly odhad z klinických meraní
+**2️⃣ Dotazník**
+Odpovedzte na otázky z anamnestického dotazníka.
+Stlačte *Vypočítaj spresnený výsledok*.
 
-    **Krok 2** – Dotazník *({N_DOT} otázok)*
-    Spresnený výsledok s anamnézou
-
-    ---
-    **Modely:**
-    - 🟦 **Anamnéza / {pkg_ana.get('model_name','ExtraTrees')}**
-      AUC_CV = {pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · 5 premenných
-    - 🟩 **Kombinácia / {pkg_kom.get('model_name','RF')}**
-      AUC_CV = {pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · 5+{N_DOT} premenných
-      *(skriningový prah={pkg_kom.get('threshold',0.30):.2f}: senzit. 95%, špecif. ~45%)*
-
-    ---
-    **Tri pásma modelového skóre** *(relatívne k prahovej hodnote modelu)*:
-    🟢 nízke — skóre výrazne pod prahom
-    🟠 hraničné — skóre v okolí prahu (±10 %)
-    🔴 zvýšené — skóre výrazne nad prahom
-
-    **Cieľ:** orientačný odhad výsledku HUTT testu
-
-    ---
-    ⚠️ *Orientačný prototyp.
-    Nenahradzuje klinické rozhodnutie.*
-    """)
+**3️⃣ Výsledky**
+Porovnanie oboch modelov + grafy.
+""")
+    st.markdown("---")
+    st.markdown("""
+**Pásma modelového skóre:**
+🟢 **Nízke** — pod prahom
+🟠 **Hraničné** — v okolí prahu
+🔴 **Zvýšené** — nad prahom
+""")
+    st.markdown("---")
+    st.warning("⚠️ Výskumný prototyp. Nenahradzuje klinické rozhodnutie.")
     st.markdown("---")
     if st.button("🔄 Nový pacient", use_container_width=True, type="primary", key="btn_novy_sidebar"):
         for key in list(st.session_state.keys()):
@@ -400,17 +392,17 @@ if "page" not in st.session_state:
 
 _nav1, _nav2, _nav3 = st.columns(3)
 with _nav1:
-    if st.button("1 — Anamnéza", use_container_width=True,
+    if st.button("1 — Anamnéza", use_container_width=True, key="nav_1",
                  type="primary" if st.session_state["page"] == 0 else "secondary"):
         st.session_state["page"] = 0
         st.rerun()
 with _nav2:
-    if st.button(f"2 — Dotazník ({N_DOT} otázok)", use_container_width=True,
+    if st.button(f"2 — Dotazník ({N_DOT} otázok)", use_container_width=True, key="nav_2",
                  type="primary" if st.session_state["page"] == 1 else "secondary"):
         st.session_state["page"] = 1
         st.rerun()
 with _nav3:
-    if st.button("3 — Výsledky", use_container_width=True,
+    if st.button("3 — Výsledky", use_container_width=True, key="nav_3",
                  type="primary" if st.session_state["page"] == 2 else "secondary"):
         st.session_state["page"] = 2
         st.rerun()
@@ -455,12 +447,16 @@ if page == 0:
                            use_container_width=True)
 
     if btn_krok1:
-        X_ana = np.array([[pohlavie_enc, vek, tk_sys, tk_dia, pulz]])
-        prob_ana, pred_ana = predict(pkg_ana, X_ana)
-        st.session_state["prob_ana"]   = prob_ana
-        st.session_state["pred_ana"]   = pred_ana
-        st.session_state["ana_inputs"] = (pohlavie_enc, vek, tk_sys, tk_dia, pulz)
-        st.session_state["step2_done"] = False
+        if tk_sys <= tk_dia:
+            st.error(f"⚠️ Neplatné hodnoty TK: systolický ({tk_sys}) musí byť väčší "
+                     f"ako diastolický ({tk_dia}). Skontrolujte zadané hodnoty.")
+        else:
+            X_ana = np.array([[pohlavie_enc, vek, tk_sys, tk_dia, pulz]])
+            prob_ana, pred_ana = predict(pkg_ana, X_ana)
+            st.session_state["prob_ana"]   = prob_ana
+            st.session_state["pred_ana"]   = pred_ana
+            st.session_state["ana_inputs"] = (pohlavie_enc, vek, tk_sys, tk_dia, pulz)
+            st.session_state["step2_done"] = False
 
     if "prob_ana" in st.session_state:
         prob_ana = st.session_state["prob_ana"]
@@ -649,6 +645,39 @@ if page == 2:
                 "Kombinovaný model zohľadňuje symptómy z dotazníka. "
                 "Pri rozdielnych výsledkoch zvážte oba pohľady; rozhodnutie ostáva na lekárovi."
             )
+
+        # ── Odporúčanie podľa pásma ──────────────────────────────────────────
+        _band_final = band_kom  # kombinovaný model je relevantnejší
+        if _band_final == "zvýšené":
+            st.markdown("""
+            <div style='padding:14px; border-left:4px solid #e74c3c;
+                        background:var(--info-bg); color:var(--info-text);
+                        border-radius:0 8px 8px 0; margin:8px 0;'>
+            <b>🔴 Zvýšené skóre — odporúčaný postup:</b><br>
+            Modelové skóre naznačuje vyššiu pravdepodobnosť pozitívneho HUTT testu.
+            Zvážte indikáciu HUTT testu podľa aktuálnych klinických usmernení.
+            Výsledok <b>nenahradzuje</b> klinické vyšetrenie ani rozhodnutie lekára.
+            </div>""", unsafe_allow_html=True)
+        elif _band_final == "hraničné":
+            st.markdown("""
+            <div style='padding:14px; border-left:4px solid #e67e22;
+                        background:var(--info-bg); color:var(--info-text);
+                        border-radius:0 8px 8px 0; margin:8px 0;'>
+            <b>🟠 Hraničné skóre — odporúčaný postup:</b><br>
+            Výsledok je nejednoznačný. Zvážte doplňujúce klinické informácie
+            a individuálnu situáciu pacienta pred ďalším rozhodnutím.
+            Výsledok <b>nenahradzuje</b> klinické vyšetrenie ani rozhodnutie lekára.
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style='padding:14px; border-left:4px solid #27ae60;
+                        background:var(--info-bg); color:var(--info-text);
+                        border-radius:0 8px 8px 0; margin:8px 0;'>
+            <b>🟢 Nízke skóre — odporúčaný postup:</b><br>
+            Modelové skóre naznačuje nižšiu pravdepodobnosť pozitívneho HUTT testu.
+            Klinické rozhodnutie zostáva na lekárovi s prihliadnutím na celkový obraz pacienta.
+            Výsledok <b>nenahradzuje</b> klinické vyšetrenie ani rozhodnutie lekára.
+            </div>""", unsafe_allow_html=True)
 
         # ── Zmena skóre ──────────────────────────────────────────────────────
         delta = prob_kom - prob_ana
