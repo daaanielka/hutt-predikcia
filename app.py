@@ -592,7 +592,22 @@ if page == 2:
         n_vyplnene = st.session_state.get("n_vyplnene", N_DOT)
         dot_vals   = st.session_state.get("dotaznik_vals", {})
 
-        st.markdown("## Finálny výsledok — Porovnanie modelov")
+        _th, _btn_col = st.columns([3, 1])
+        with _th:
+            st.markdown("## Finálny výsledok — Porovnanie modelov")
+        with _btn_col:
+            st.markdown("<div style='padding-top:8px;'>", unsafe_allow_html=True)
+            if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
+                for key in list(st.session_state.keys()):
+                    if key.startswith("q2_") or key in {
+                        "prob_ana", "pred_ana", "ana_inputs", "step2_open",
+                        "step2_done", "prob_kom", "pred_kom", "dotaznik_vals",
+                        "n_vyplnene", "_last_page",
+                    }:
+                        st.session_state.pop(key, None)
+                st.session_state["page"] = 0
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
         c1, mid, c2 = st.columns([5, 1, 5])
         with c1:
