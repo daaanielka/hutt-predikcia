@@ -438,18 +438,31 @@ if page == 0:
         pohlavie_enc = 1.0 if pohlavie == "Muž" else 0.0
         vek          = st.number_input("Vek (roky)", min_value=1, max_value=110, value=45, step=1)
     with col2:
-        tk_sys = st.number_input("TK systolický (mmHg)", min_value=60, max_value=250, value=120, step=1)
-        tk_dia = st.number_input("TK diastolický (mmHg)", min_value=30, max_value=150, value=80, step=1)
+        tk_neznamy = st.checkbox("TK nie je dostupný", key="tk_neznamy")
+        if tk_neznamy:
+            tk_sys = np.nan
+            tk_dia = np.nan
+            st.caption("TK bude nahradený mediánom z trénovacej vzorky.")
+        else:
+            tk_sys = st.number_input("TK systolický (mmHg)", min_value=60, max_value=250, value=120, step=1)
+            tk_dia = st.number_input("TK diastolický (mmHg)", min_value=30, max_value=150, value=80, step=1)
     with col3:
-        pulz = st.number_input("Pulz (tepy/min)", min_value=20, max_value=200, value=70, step=1)
+        pulz_neznamy = st.checkbox("Pulz nie je dostupný", key="pulz_neznamy")
+        if pulz_neznamy:
+            pulz = np.nan
+            st.caption("Pulz bude nahradený mediánom z trénovacej vzorky.")
+        else:
+            pulz = st.number_input("Pulz (tepy/min)", min_value=20, max_value=200, value=70, step=1)
 
     btn_krok1 = st.button("🔍 Vypočítaj predbežný výsledok", type="primary",
                            use_container_width=True)
 
     if btn_krok1:
-        if tk_sys <= tk_dia:
-            st.error(f"⚠️ Neplatné hodnoty TK: systolický ({tk_sys}) musí byť väčší "
-                     f"ako diastolický ({tk_dia}). Skontrolujte zadané hodnoty.")
+        tk_sys_val = tk_sys if not (isinstance(tk_sys, float) and np.isnan(tk_sys)) else None
+        tk_dia_val = tk_dia if not (isinstance(tk_dia, float) and np.isnan(tk_dia)) else None
+        if tk_sys_val is not None and tk_dia_val is not None and tk_sys_val <= tk_dia_val:
+            st.error(f"⚠️ Neplatné hodnoty TK: systolický ({tk_sys_val}) musí byť väčší "
+                     f"ako diastolický ({tk_dia_val}). Skontrolujte zadané hodnoty.")
         else:
             X_ana = np.array([[pohlavie_enc, vek, tk_sys, tk_dia, pulz]])
             prob_ana, pred_ana = predict(pkg_ana, X_ana)
