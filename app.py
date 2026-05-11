@@ -588,14 +588,6 @@ with tab3:
         else:
             st.info(f"📊 Dotazník zmenil skóre len minimálne ({delta_pct} pp) — modely sú konzistentné.")
 
-        # ── Rizikové faktory ─────────────────────────────────────────────────
-        rizikove = [OTAZKY.get(kod, kod) for kod, val in dot_vals.items() if val == 1.0]
-        if rizikove:
-            with st.expander(f"⚠️ Faktory zadané ako ÁNO ({len(rizikove)}/{N_DOT})", expanded=False):
-                for item in rizikove:
-                    st.markdown(f"- {item}")
-                st.caption("Klinická interpretácia zostáva na lekárovi.")
-
         # ── Grafy ────────────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("### 📊 Doplňujúce grafy")
@@ -701,6 +693,14 @@ Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
                     dot_display.append({"Otázka": label, "Odpoveď": ans})
                 st.table(pd.DataFrame(dot_display).set_index("Otázka"))
 
+        # ── Nový pacient ─────────────────────────────────────────────────────
+        st.markdown("---")
+        if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
+            for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_done",
+                        "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
+                st.session_state.pop(key, None)
+            st.session_state["goto_tab"] = 0  # preskok späť na záložku 1
+
 # ── Automatické prepnutie záložky ────────────────────────────────────────────
 if "goto_tab" in st.session_state:
     _tab_idx = st.session_state.pop("goto_tab")
@@ -711,6 +711,8 @@ if "goto_tab" in st.session_state:
         if (tabs && tabs.length > {_tab_idx}) {{
             tabs[{_tab_idx}].click();
         }}
+        window.parent.document.querySelector('section.main')?.scrollTo(0, 0);
+        window.parent.scrollTo(0, 0);
     }}, 100);
     </script>
     """, height=0)
