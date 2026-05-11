@@ -11,6 +11,7 @@ Spustenie: streamlit run app_10d_demo.py
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import joblib, os
@@ -386,6 +387,21 @@ with _nav3:
 st.markdown("---")
 
 page = st.session_state["page"]
+
+# Scroll nahor pri každej zmene strany
+if st.session_state.get("_last_page") != page:
+    st.session_state["_last_page"] = page
+    components.html("""
+    <script>
+    (function() {
+        var el = window.parent.document.querySelector('section[data-testid="stMain"]')
+              || window.parent.document.querySelector('.main')
+              || window.parent.document.body;
+        if (el) el.scrollTop = 0;
+        window.parent.scrollTo(0, 0);
+    })();
+    </script>
+    """, height=0)
 
 # ════════════════════════════════════════════════════════════════════════════
 # STRANA 1 – ANAMNESTICKÉ ÚDAJE
