@@ -341,9 +341,13 @@ with st.sidebar:
     """)
     st.markdown("---")
     if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
-        for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_open",
-                    "step2_done", "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
-            st.session_state.pop(key, None)
+        for key in list(st.session_state.keys()):
+            if key.startswith("q2_") or key in {
+                "prob_ana", "pred_ana", "ana_inputs", "step2_open",
+                "step2_done", "prob_kom", "pred_kom", "dotaznik_vals",
+                "n_vyplnene", "_last_page",
+            }:
+                st.session_state.pop(key, None)
         st.session_state["page"] = 0
         st.rerun()
 
@@ -476,6 +480,9 @@ if page == 1:
             "Neznáme hodnoty sú nahradené mediánom z trénovacej vzorky. "
             "Pri väčšom počte neznámych odpovedí je výsledok menej spoľahlivý."
         )
+        st.caption("💡 **Návod:** Ak symptóm nebol prítomný → zvoľte **Nie**. "
+                   "Ak informácia nie je dostupná → zvoľte **Neznáme**. "
+                   "Číselné polia C1, C2, C4 nechajte prázdne ak hodnota nie je známa.")
 
         NUMERIC_INPUTS = {
             "C1": {"label": "C1 – Vek pri prvom výskyte ťažkostí (roky)",
@@ -486,10 +493,6 @@ if page == 1:
                    "min": 1, "max": 100, "default": 1, "step": 1},
         }
         NUMERIC_KEYS = set(NUMERIC_INPUTS.keys())
-
-        st.caption("💡 **Návod:** Ak symptóm nebol prítomný → zvoľte **Nie**. "
-                   "Ak informácia nie je dostupná → zvoľte **Neznáme** (imputácia mediánom). "
-                   "Číselné polia C1, C2, C4 ponechajte prázdne ak hodnota nie je známa.")
 
         BLOKY = {
             "C – Vznik ťažkostí":                    ["C1", "C2", "C4"],
@@ -504,43 +507,32 @@ if page == 1:
             "P – Osobná anamnéza":                    ["P5", "P9", "P18", "P27", "P31", "P33"],
         }
 
+        # ── Formulár – žiadny rerender pri vypĺňaní, iba pri odoslaní ────────
         dotaznik_vals = {}
-        for blok_nazov, kody in BLOKY.items():
-            kody_v_modeli = [k for k in kody if k in SELECTED_DOT]
-            if not kody_v_modeli:
-                continue
-            st.markdown(f"**{blok_nazov}**")
-            cols = st.columns(2)
-            for i, kod in enumerate(kody_v_modeli):
-                with cols[i % 2]:
-                    if kod in NUMERIC_INPUTS:
-                        cfg = NUMERIC_INPUTS[kod]
-                        val = st.number_input(cfg["label"], min_value=cfg["min"],
-                                              max_value=cfg["max"], value=cfg["default"],
-                                              step=cfg["step"], key=f"q2_{kod}")
-                        dotaznik_vals[kod] = float(val) if val is not None else np.nan
-                    else:
-                        label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
-                        dotaznik_vals[kod] = tristate(label, f"q2_{kod}")
-            st.markdown("")
-
-        n_vyplnene = vyplnenost(dotaznik_vals, NUMERIC_KEYS)
-        n_nezname  = N_DOT - n_vyplnene
-        fill_pct   = int(n_vyplnene / N_DOT * 100)
-        if n_nezname == 0:
-            st.success(f"✅ Dotazník vyplnený: **{n_vyplnene}/{N_DOT}** otázok ({fill_pct}%)")
-        elif n_nezname <= N_DOT * 0.3:
-            st.info(f"ℹ️ Vyplnených: **{n_vyplnene}/{N_DOT}** otázok — "
-                    f"{n_nezname} neznámych hodnôt bude imputovaných mediánom.")
-        else:
-            st.warning(f"⚠️ Vyplnených iba **{n_vyplnene}/{N_DOT}** otázok ({fill_pct}%) — "
-                       f"veľa neznámych hodnôt ({n_nezname}). Výsledok interpretujte opatrne.")
-
-        st.markdown("---")
-        btn_krok2 = st.button("🎯 Vypočítaj spresnený výsledok", type="primary",
-                               use_container_width=True)
+        with st.form("dotaznik_form"):
+            for blok_nazov, kody in BLOKY.items():
+                kody_v_modeli = [k for k in kody if k in SELECTED_DOT]
+                if not kody_v_modeli:
+                    continue
+                st.markdown(f"**{blok_nazov}**")
+                cols = st.columns(2)
+                for i, kod in enumerate(kody_v_modeli):
+                    with cols[i % 2]:
+                        if kod in NUMERIC_INPUTS:
+                            cfg = NUMERIC_INPUTS[kod]
+                            val = st.number_input(cfg["label"], min_value=cfg["min"],
+                                                  max_value=cfg["max"], value=cfg["default"],
+                                                  step=cfg["step"], key=f"q2_{kod}")
+                            dotaznik_vals[kod] = float(val) if val is not None else np.nan
+                        else:
+                            label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
+                            dotaznik_vals[kod] = tristate(label, f"q2_{kod}")
+                st.markdown("")
+            btn_krok2 = st.form_submit_button("🎯 Vypočítaj spresnený výsledok",
+                                               type="primary", use_container_width=True)
 
         if btn_krok2:
+            n_vyplnene = vyplnenost(dotaznik_vals, NUMERIC_KEYS)
             pohlavie_enc, vek, tk_sys, tk_dia, pulz = st.session_state["ana_inputs"]
             X_kom = build_kom_input(pohlavie_enc, vek, tk_sys, tk_dia, pulz, dotaznik_vals)
             prob_kom, pred_kom = predict(pkg_kom, X_kom)
@@ -552,8 +544,18 @@ if page == 1:
             # ostaneme na strane 2, zobrazíme tlačidlo "Prejsť na výsledky"
 
         if st.session_state.get("step2_done"):
-            _ana_name_s2 = pkg_ana.get('model_name', 'ExtraTrees')
             _prob_kom_s2 = st.session_state["prob_kom"]
+            _n_vypl = st.session_state.get("n_vyplnene", N_DOT)
+            _n_nez  = N_DOT - _n_vypl
+            _fpct   = int(_n_vypl / N_DOT * 100)
+            if _n_nez == 0:
+                st.success(f"✅ Dotazník vyplnený: **{_n_vypl}/{N_DOT}** otázok ({_fpct}%)")
+            elif _n_nez <= N_DOT * 0.3:
+                st.info(f"ℹ️ Vyplnených: **{_n_vypl}/{N_DOT}** otázok — "
+                        f"{_n_nez} neznámych hodnôt imputovaných mediánom.")
+            else:
+                st.warning(f"⚠️ Vyplnených iba **{_n_vypl}/{N_DOT}** otázok ({_fpct}%) — "
+                           f"veľa neznámych hodnôt ({_n_nez}). Výsledok interpretujte opatrne.")
             st.markdown("---")
             st.markdown(f"### Spresnený výsledok — Kombinácia / {pkg_kom.get('model_name','RF')}")
             _cs1, _cs2 = st.columns([1, 2])
