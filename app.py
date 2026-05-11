@@ -398,7 +398,6 @@ with tab1:
         st.session_state["pred_ana"]   = pred_ana
         st.session_state["ana_inputs"] = (pohlavie_enc, vek, tk_sys, tk_dia, pulz)
         st.session_state["step2_done"] = False
-        st.session_state["goto_tab"]   = 1  # automaticky prepni na záložku 2
 
     if "prob_ana" in st.session_state:
         prob_ana = st.session_state["prob_ana"]
