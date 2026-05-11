@@ -646,39 +646,6 @@ if page == 2:
                 "Pri rozdielnych výsledkoch zvážte oba pohľady; rozhodnutie ostáva na lekárovi."
             )
 
-        # ── Odporúčanie podľa pásma ──────────────────────────────────────────
-        _band_final = band_kom  # kombinovaný model je relevantnejší
-        if _band_final == "zvýšené":
-            st.markdown("""
-            <div style='padding:14px; border-left:4px solid #e74c3c;
-                        background:var(--info-bg); color:var(--info-text);
-                        border-radius:0 8px 8px 0; margin:8px 0;'>
-            <b>🔴 Zvýšené skóre — odporúčaný postup:</b><br>
-            Modelové skóre naznačuje vyššiu pravdepodobnosť pozitívneho HUTT testu.
-            Zvážte indikáciu HUTT testu podľa aktuálnych klinických usmernení.
-            Výsledok <b>nenahradzuje</b> klinické vyšetrenie ani rozhodnutie lekára.
-            </div>""", unsafe_allow_html=True)
-        elif _band_final == "hraničné":
-            st.markdown("""
-            <div style='padding:14px; border-left:4px solid #e67e22;
-                        background:var(--info-bg); color:var(--info-text);
-                        border-radius:0 8px 8px 0; margin:8px 0;'>
-            <b>🟠 Hraničné skóre — odporúčaný postup:</b><br>
-            Výsledok je nejednoznačný. Zvážte doplňujúce klinické informácie
-            a individuálnu situáciu pacienta pred ďalším rozhodnutím.
-            Výsledok <b>nenahradzuje</b> klinické vyšetrenie ani rozhodnutie lekára.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style='padding:14px; border-left:4px solid #27ae60;
-                        background:var(--info-bg); color:var(--info-text);
-                        border-radius:0 8px 8px 0; margin:8px 0;'>
-            <b>🟢 Nízke skóre — odporúčaný postup:</b><br>
-            Modelové skóre naznačuje nižšiu pravdepodobnosť pozitívneho HUTT testu.
-            Klinické rozhodnutie zostáva na lekárovi s prihliadnutím na celkový obraz pacienta.
-            Výsledok <b>nenahradzuje</b> klinické vyšetrenie ani rozhodnutie lekára.
-            </div>""", unsafe_allow_html=True)
-
         # ── Zmena skóre ──────────────────────────────────────────────────────
         delta = prob_kom - prob_ana
         delta_pct = int(abs(delta) * 100)
