@@ -50,6 +50,7 @@ from sklearn.model_selection import (StratifiedKFold, cross_val_score,
 from sklearn.metrics import roc_auc_score, brier_score_loss
 from sklearn.dummy import DummyClassifier
 from sklearn.preprocessing import StandardScaler
+from scipy.stats import wilcoxon
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
@@ -272,8 +273,8 @@ def make_pipeline_kombinacia(base_clf, k_dot, n_dot, needs_scale=False):
 # Definície modelov (identické ako 10d)
 _rf   = RandomForestClassifier(n_estimators=200, max_depth=12, random_state=SEED)
 _et   = ExtraTreesClassifier(n_estimators=200, max_depth=12, random_state=SEED)
-_lr   = LogisticRegression(C=1.0, max_iter=1000, random_state=SEED)
-_svm  = LinearSVC(C=1.0, max_iter=2000, random_state=SEED)
+_lr   = LogisticRegression(C=1.0, max_iter=1000, random_state=SEED, class_weight='balanced')
+_svm  = LinearSVC(C=1.0, max_iter=2000, random_state=SEED, class_weight='balanced')
 _gb   = GradientBoostingClassifier(n_estimators=120, max_depth=3, learning_rate=0.08,
                                     subsample=0.8, random_state=SEED)
 _hgb  = HistGradientBoostingClassifier(max_iter=200, max_depth=4, learning_rate=0.08,
@@ -353,8 +354,8 @@ MODEL_DEFS = [
 ]
 BASELINE = DummyClassifier(strategy='most_frequent', random_state=SEED)
 
-# Modely pre Nested CV (len kľúčové – redukujeme runtime)
-NESTED_CV_MODELS = ["RF", "ExtraTrees", "LightGBM", "XGBoost", "CatBoost"]
+# Nested CV pre všetky modely – nestranný odhad výkonu bez model selection bias
+NESTED_CV_MODELS = [m for m, _, _ in MODEL_DEFS]
 
 # ==============================================================================
 # SEKCIA 3b: K-GRID A POMOCNÉ FUNKCIE
@@ -582,6 +583,46 @@ pd.DataFrame(nested_rows).to_csv(
     os.path.join(OUT_DIR, 'vysledky_10f_nested_cv.csv'), index=False)
 print(f"\n  Ulozene: vysledky_10f_nested_cv.csv")
 
+# ==============================================================================
+# SEKCIA 3d: WILCOXON SIGNED-RANK TEST (porovnanie top modelov v nested CV)
+# ==============================================================================
+print("\n" + "="*70)
+print("  SEKCIA 3d: WILCOXON SIGNED-RANK TEST (top modely, nested CV foldy)")
+print("  POZOR: n=5 foldov → test má nízku štatistickú silu (min p=0.0625)")
+print("="*70)
+
+# Zoraď modely podľa mean_auc z nested CV
+_sorted_nested = sorted(nested_results.items(),
+                        key=lambda x: x[1]['mean_auc'], reverse=True)
+print(f"\n  Poradie modelov podľa nested CV AUC (Kombinacia skupina):")
+for i, (mn, res) in enumerate(_sorted_nested, 1):
+    print(f"  {i:2d}. {mn:<20} AUC={res['mean_auc']*100:.1f}% ± {res['std_auc']*100:.1f}%")
+
+# Wilcoxon test: top model vs. ostatné top 5
+if len(_sorted_nested) >= 2:
+    print(f"\n  Wilcoxon test: najlepší model vs. ostatní (5 foldov, two-sided)")
+    _best_name, _best_res = _sorted_nested[0]
+    _best_aucs = np.array(_best_res['fold_aucs'])
+    wilcoxon_rows = []
+    for mn, res in _sorted_nested[1:]:
+        _other_aucs = np.array(res['fold_aucs'])
+        try:
+            stat, pval = wilcoxon(_best_aucs, _other_aucs, alternative='two-sided')
+        except Exception:
+            stat, pval = float('nan'), float('nan')
+        diff_mean = (_best_res['mean_auc'] - res['mean_auc']) * 100
+        print(f"  {_best_name} vs {mn:<20} Δ={diff_mean:+.1f}pp  p={pval:.4f}"
+              f"{'  *' if pval < 0.05 else '  ns'}")
+        wilcoxon_rows.append({'Model_A': _best_name, 'Model_B': mn,
+                              'Delta_pp': round(diff_mean, 2),
+                              'Wilcoxon_stat': round(stat, 3) if not np.isnan(stat) else '',
+                              'p_value': round(pval, 4) if not np.isnan(pval) else '',
+                              'Significant': pval < 0.05 if not np.isnan(pval) else False})
+    pd.DataFrame(wilcoxon_rows).to_csv(
+        os.path.join(OUT_DIR, 'vysledky_10f_wilcoxon.csv'), index=False)
+    print(f"  Ulozene: vysledky_10f_wilcoxon.csv")
+    print(f"  Poznamka: Pri n=5 foldoch je minimalne dosiahnutelne p = 0.0625 (two-sided).")
+
 # Boxplot Nested CV AUC
 try:
     if nested_results:
@@ -738,10 +779,20 @@ print("\n" + "="*70)
 print("  SEKCIA 6: VYBER KANDIDATSKEHO MODELU (automaticky – max AUC_CV)")
 print("="*70)
 
-# POZOR: Nested CV odhad existuje len pre modely v NESTED_CV_MODELS (5 modelov).
-# Výber víťaza prebieha zo všetkých modelov podľa optimistického AUC_CV (5-fold CV).
-# Pre zvyšných 15 modelov teda existuje model selection bias.
-# Akceptovateľné pre bakalársku prácu – uviesť ako limitáciu v texte.
+# Výber víťaza:
+#   1. Ak existujú nested CV výsledky pre model v Kombinacia skupine → použij nested CV AUC
+#      (nestranný odhad, bez model selection bias)
+#   2. Pre ostatné skupiny (Anamneza, Dotaznik) → simple CV AUC (nested CV pre ne nebežalo)
+#   3. Finálne porovnanie: najlepší Kombinacia (nested) vs. najlepší Anamneza/Dotaznik (simple)
+
+# Najdi víťaza z Kombinacia podľa nested CV
+best_kom_nested_auc = -1; best_kom_nested_name = None
+for mname in nested_results:
+    auc_n = nested_results[mname]['mean_auc']
+    if auc_n > best_kom_nested_auc:
+        best_kom_nested_auc = auc_n; best_kom_nested_name = mname
+
+# Najdi víťaza z každej skupiny podľa simple CV
 best_cv = -1; best_key = None
 for gname, mods in all_results.items():
     for mname, r in mods.items():
@@ -751,8 +802,23 @@ for gname, mods in all_results.items():
 
 bg_auto, bm_auto = best_key
 br_auto = all_results[bg_auto][bm_auto]
-print(f"\n  Automaticky vitaz (max AUC_CV): {bg_auto}/{bm_auto}  "
+
+# Porovnaj: víťaz Kombinacia (nested) vs. celkový víťaz (simple CV)
+if best_kom_nested_name and best_kom_nested_name in all_results.get('Kombinacia', {}):
+    br_kom_nested = all_results['Kombinacia'][best_kom_nested_name]
+    print(f"\n  Vitaz Kombinacia podla NESTED CV: Kombinacia/{best_kom_nested_name}  "
+          f"nested_AUC={best_kom_nested_auc*100:.1f}%  "
+          f"simple_AUC={br_kom_nested['AUC_CV']*100:.1f}%")
+print(f"  Vitaz podla simple CV (vsetky skupiny): {bg_auto}/{bm_auto}  "
       f"AUC_CV={br_auto['AUC_CV']*100:.1f}%")
+
+# Použi víťaza podľa nested CV z Kombinacia skupiny (metodicky čistejšie)
+if best_kom_nested_name and best_kom_nested_name in all_results.get('Kombinacia', {}):
+    bg_auto = 'Kombinacia'; bm_auto = best_kom_nested_name
+    br_auto = all_results['Kombinacia'][best_kom_nested_name]
+    print(f"  → Finalny vitaz (nested CV): Kombinacia/{bm_auto}")
+else:
+    print(f"  → Finalny vitaz (simple CV fallback): {bg_auto}/{bm_auto}")
 
 bg, bm, br = bg_auto, bm_auto, br_auto
 base_r = all_results[bg].get('Baseline')
@@ -1172,6 +1238,165 @@ except Exception as e:
     print(f"  ROC krivky: {e}")
 
 # ==============================================================================
+# SEKCIA 12: SHAP – INTERPRETOVATEĽNOSŤ MODELU
+# ==============================================================================
+print("\n" + "="*70)
+print("  SEKCIA 12: SHAP – interpretovateľnosť finálneho modelu")
+print(f"  Model: {bg}/{bm}")
+print("="*70)
+
+try:
+    import shap
+
+    _pipe_shap = br['pipeline']
+    _feats_shap = GROUPS[bg]["feats"]
+    _X_te_shap = df_valid[_feats_shap].iloc[te_idx].values.astype(float)
+
+    # Získaj transformovaný X po imputácii a selekcii
+    _X_te_transformed = _pipe_shap[:-1].transform(_X_te_shap)
+
+    # Získaj samotný klasifikátor (bez CalibratedClassifierCV obaľovača)
+    _clf_inner = _pipe_shap.named_steps['clf']
+
+    # Skús TreeExplainer (RF, ExtraTrees, GradBoost...)
+    try:
+        if hasattr(_clf_inner, 'estimators_'):
+            # CalibratedClassifierCV – použi base estimator
+            _base_est = _clf_inner.estimators_[0].estimator if hasattr(_clf_inner, 'estimators_') else _clf_inner
+            _explainer = shap.TreeExplainer(_base_est)
+        else:
+            _explainer = shap.TreeExplainer(_clf_inner)
+        _shap_vals = _explainer.shap_values(_X_te_transformed)
+        # Pre binárnu klasifikáciu: shap_values môže byť list [neg, pos]
+        if isinstance(_shap_vals, list):
+            _shap_vals = _shap_vals[1]
+    except Exception:
+        # Fallback: KernelExplainer (pomalší, univerzálny)
+        _explainer = shap.KernelExplainer(
+            lambda x: _pipe_shap.predict_proba(
+                np.hstack([np.zeros((len(x), len(_feats_shap) - _X_te_transformed.shape[1])), x])
+            )[:, 1],
+            shap.kmeans(_X_te_transformed, 10)
+        )
+        _shap_vals = _explainer.shap_values(_X_te_transformed)
+
+    # Názvy features po ColumnTransformer selekcii
+    if bg == 'Kombinacia':
+        _ct = _pipe_shap.named_steps['selector']
+        _shap_feat_names = []
+        for _tname, _trans, _cols in _ct.transformers_:
+            if _tname == 'ana':
+                _shap_feat_names += [_feats_shap[c] for c in _cols]
+            elif _tname == 'dot' and hasattr(_trans, 'get_support'):
+                _dot_feats_all = [_feats_shap[c] for c in _cols]
+                _shap_feat_names += [f for f, m in zip(_dot_feats_all, _trans.get_support()) if m]
+    else:
+        _shap_feat_names = _feats_shap
+
+    # Bar plot (mean |SHAP|)
+    _mean_abs_shap = np.abs(_shap_vals).mean(axis=0)
+    _shap_df = pd.DataFrame({'Feature': _shap_feat_names[:len(_mean_abs_shap)],
+                             'Mean_SHAP': _mean_abs_shap}).sort_values('Mean_SHAP', ascending=False)
+    _shap_df.to_csv(os.path.join(OUT_DIR, 'vysledky_10f_shap.csv'), index=False)
+
+    fig, ax = plt.subplots(figsize=(9, max(5, len(_shap_df)*0.35)))
+    fig.patch.set_facecolor("#F8F7F5"); ax.set_facecolor("#F8F7F5")
+    _top_n = min(20, len(_shap_df))
+    _plot_df = _shap_df.head(_top_n).iloc[::-1]
+    ax.barh(_plot_df['Feature'], _plot_df['Mean_SHAP'], color='#2E86AB', alpha=0.8)
+    ax.set_xlabel("Priemerná |SHAP hodnota| (dopad na výstup modelu)", fontsize=10)
+    ax.set_title(f"SHAP – Top {_top_n} najdôležitejších premenných\n"
+                 f"Model: {bg}/{bm}  |  n_test={len(y_te)}", fontweight='bold')
+    ax.grid(axis='x', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, 'graf_10f_shap_bar.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    print("  Ulozeny: graf_10f_shap_bar.png")
+
+    # Beeswarm plot
+    try:
+        fig, ax = plt.subplots(figsize=(10, max(5, _top_n*0.4)))
+        fig.patch.set_facecolor("#F8F7F5")
+        shap.summary_plot(_shap_vals[:, :_top_n],
+                         _X_te_transformed[:, :_top_n],
+                         feature_names=_shap_feat_names[:_top_n],
+                         show=False, plot_size=None)
+        plt.title(f"SHAP Beeswarm – {bg}/{bm}", fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUT_DIR, 'graf_10f_shap_beeswarm.png'),
+                    dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  Ulozeny: graf_10f_shap_beeswarm.png")
+    except Exception as e_bee:
+        print(f"  Beeswarm: {e_bee}")
+
+    print(f"\n  Top 10 features podla SHAP:")
+    for _, row in _shap_df.head(10).iterrows():
+        print(f"    {row['Feature']:<25}  mean|SHAP|={row['Mean_SHAP']:.4f}")
+
+except ImportError:
+    print("  SHAP nie je nainštalovaný. Spusti: pip install shap")
+except Exception as e:
+    print(f"  SHAP chyba: {e}")
+    import traceback; traceback.print_exc()
+
+# ==============================================================================
+# SEKCIA 13: KORELÁCIE VSTUPNÝCH PREMENNÝCH
+# ==============================================================================
+print("\n" + "="*70)
+print("  SEKCIA 13: KORELÁCIE VSTUPNÝCH PREMENNÝCH (selected features)")
+print("="*70)
+
+try:
+    _feats_cor = GROUPS['Kombinacia']['feats']
+    _X_cor = df_valid[_feats_cor].iloc[tr_idx].values.astype(float)
+    _X_cor_imp = SimpleImputer(strategy='median').fit_transform(_X_cor)
+    _cor_df = pd.DataFrame(_X_cor_imp, columns=_feats_cor)
+
+    # Vyber len selected_dot + anamneza features
+    _sel_feats_cor = ANAMNEZA + (br.get('pipeline').named_steps['selector']
+                                  .transformers_[1][1].get_feature_names_out().tolist()
+                                  if bg == 'Kombinacia' and hasattr(
+                                      br.get('pipeline').named_steps.get('selector', object()),
+                                      'transformers_') else DOTAZNIK_KAND[:30])
+    _sel_feats_cor = [f for f in _sel_feats_cor if f in _cor_df.columns][:35]
+    _cor_matrix = _cor_df[_sel_feats_cor].corr()
+
+    # Uloženie
+    _cor_matrix.to_csv(os.path.join(OUT_DIR, 'vysledky_10f_korelacie.csv'))
+    print(f"  Ulozene: vysledky_10f_korelacie.csv ({len(_sel_feats_cor)} features)")
+
+    # Heatmapa
+    _n_f = len(_sel_feats_cor)
+    fig, ax = plt.subplots(figsize=(max(10, _n_f*0.5), max(8, _n_f*0.5)))
+    fig.patch.set_facecolor("#F8F7F5")
+    _cm = ax.imshow(_cor_matrix.values, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+    plt.colorbar(_cm, ax=ax, label='Pearsonov korelačný koeficient')
+    ax.set_xticks(range(_n_f)); ax.set_xticklabels(_sel_feats_cor, rotation=90, fontsize=7)
+    ax.set_yticks(range(_n_f)); ax.set_yticklabels(_sel_feats_cor, fontsize=7)
+    ax.set_title(f"Korelácie vstupných premenných – {bg}/{bm}\n"
+                 f"(trénovacia sada, n={len(tr_idx)})", fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, 'graf_10f_korelacie.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    print("  Ulozeny: graf_10f_korelacie.png")
+
+    # Vypíš najvyššie korelácie (okrem diagonály)
+    _cor_pairs = []
+    for i in range(len(_sel_feats_cor)):
+        for j in range(i+1, len(_sel_feats_cor)):
+            _cor_pairs.append((_sel_feats_cor[i], _sel_feats_cor[j],
+                               abs(_cor_matrix.iloc[i, j])))
+    _cor_pairs.sort(key=lambda x: x[2], reverse=True)
+    print(f"\n  Top 10 najvyššich korelacii (|r|):")
+    for f1, f2, r in _cor_pairs[:10]:
+        print(f"    {f1:<20} × {f2:<20}  |r|={r:.3f}")
+
+except Exception as e:
+    print(f"  Korelacie chyba: {e}")
+    import traceback; traceback.print_exc()
+
+# ==============================================================================
 # ZÁVER
 # ==============================================================================
 print("\n" + "="*70)
@@ -1180,20 +1405,31 @@ print("="*70)
 
 print(f"""
   Výstupné súbory:
-    vysledky_10f_nested_cv.csv    – výsledky nested CV (5 modelov × 5 foldov)
+    vysledky_10f_nested_cv.csv    – výsledky nested CV (všetky modely × 5 foldov)
+    vysledky_10f_wilcoxon.csv     – Wilcoxon test porovnania top modelov
     vysledky_10f_porovnanie.csv   – finálne porovnanie (20 modelov × 3 skupiny)
     vysledky_10f_vsetky_modely.csv– zoradená tabuľka všetkých modelov
     vysledky_10f_bootstrap_ci.csv – bootstrap 95% CI finálneho modelu
     vysledky_10f_dca.csv          – Decision Curve Analysis dáta
-    graf_10f_nested_cv.png        – boxplot AUC cez vonkajšie foldy
+    vysledky_10f_shap.csv         – SHAP hodnoty (mean |SHAP| per feature)
+    vysledky_10f_korelacie.csv    – korelačná matica selected features
+    graf_10f_nested_cv.png        – boxplot AUC cez vonkajšie foldy (všetky modely)
     graf_10f_dca.png              – DCA krivka (net benefit vs. prah)
     graf_10f_roc.png              – ROC krivky (3 skupiny)
     graf_10f_kalibracia.png       – kalibračná krivka
-    model_10f_kombinacia.joblib   – finálny pipeline ({bg}/{bm})
+    graf_10f_shap_bar.png         – SHAP bar plot (top 20 features)
+    graf_10f_shap_beeswarm.png    – SHAP beeswarm plot
+    graf_10f_korelacie.png        – heatmapa korelácií
+    model_10f_kombinacia.joblib   – finálny pipeline ({bg}/{bm}, nested CV víťaz)
     model_10f_anamneza.joblib     – anamnéza pipeline (Anamneza/{APP_ANA_MODEL})
 
   Kľúčové metodologické prínosy 10f:
-    1. Nested CV → nestranný odhad AUC (vonkajší fold = test, vnútorný = K výber)
-    2. Prah z OOF val foldov → test set skutočne held-out pre finalnu evaluaciu
-    3. DCA → klinická relevancia modelu cez spektrum rizikových prahov
+    1. Nested CV pre VŠETKÝCH 20 modelov → nestranný odhad, bez model selection bias
+    2. Víťaz vybraný podľa nested CV AUC (nie simple CV)
+    3. Prah z OOF val foldov → test set skutočne held-out pre finálnu evaluáciu
+    4. DCA → klinická relevancia modelu cez spektrum rizikových prahov
+    5. SHAP → interpretovateľnosť: ktoré premenné model používa a ako
+    6. Korelácie → transparentnosť vstupných premenných
+    7. Wilcoxon test → štatistické porovnanie top modelov
+    8. class_weight='balanced' pre LR a SVM → férovejšie pri miernej nevyváženosti
 """)
