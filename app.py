@@ -648,7 +648,7 @@ if page == 2:
             st.markdown(verdict_html(prob_ana, threshold=pkg_ana['threshold']),
                         unsafe_allow_html=True)
             st.caption(f"AUC_CV = {pkg_ana['AUC_CV']}% ± {pkg_ana.get('AUC_CV_std','?')}%  ·  "
-                       f"Senzitivita=93% · Špecificita=23%")
+                       f"Senzitivita={pkg_ana.get('sens_skrining','?')}% · Špecificita={pkg_ana.get('spec_skrining','?')}%")
         with mid:
             st.markdown("<br><br><div style='text-align:center;font-size:1.8em;'>⟷</div>",
                         unsafe_allow_html=True)
