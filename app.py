@@ -508,13 +508,13 @@ if page == 1:
         )
         st.caption("💡 **Návod:** Ak symptóm nebol prítomný → zvoľte **Nie**. "
                    "Ak informácia nie je dostupná → zvoľte **Neznáme**. "
-                   "Číselné polia C1, C2, C4 nechajte prázdne ak hodnota nie je známa.")
+                   "Pre C2 nechajte hodnotu **0** ak počet nie je známy.")
 
         NUMERIC_INPUTS = {
             "C1": {"label": "C1 – Vek pri prvom výskyte ťažkostí (roky)",
                    "min": 1, "max": 100, "default": 1, "step": 1},
-            "C2": {"label": "C2 – Celkový počet odpadnutí (prázdne = neznáme)",
-                   "min": 0, "max": 200, "default": None, "step": 1},
+            "C2": {"label": "C2 – Celkový počet odpadnutí (0 = neznáme)",
+                   "min": 0, "max": 200, "default": 0, "step": 1},
             "C4": {"label": "C4 – Vek v období najhorších ťažkostí (roky)",
                    "min": 1, "max": 100, "default": 1, "step": 1},
         }
@@ -549,7 +549,11 @@ if page == 1:
                             val = st.number_input(cfg["label"], min_value=cfg["min"],
                                                   max_value=cfg["max"], value=cfg["default"],
                                                   step=cfg["step"], key=f"q2_{kod}")
-                            dotaznik_vals[kod] = float(val) if val is not None else np.nan
+                            # C2=0 znamená "neznáme" → NaN (rovnaká imputácia ako pri chýbajúcej hodnote)
+                            if kod == "C2" and val == 0:
+                                dotaznik_vals[kod] = np.nan
+                            else:
+                                dotaznik_vals[kod] = float(val) if val is not None else np.nan
                         else:
                             label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
                             dotaznik_vals[kod] = tristate(label, f"q2_{kod}")
