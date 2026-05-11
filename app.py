@@ -60,7 +60,7 @@ PATH_KOM = os.path.join(BASE, "model_10f_kombinacia.joblib")
 
 REQUIRED_KEYS = {"pipeline", "features", "threshold", "model_name", "AUC_CV"}
 
-@st.cache_resource
+@st.cache_resource(ttl=3600)   # max 1 hod. cache → nové joblib súbory sa načítajú po redeployi
 def load_models():
     ana = joblib.load(PATH_ANA)
     kom = joblib.load(PATH_KOM)
@@ -735,7 +735,9 @@ Trénovacia sada: n={_n_tr} (80 %) · Testovacia sada: n={_n_te} (20 %).
 - Anamnéza: {pkg_ana.get('model_name','ExtraTrees')} · AUC_CV={pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · {N_ANA} premenných · prah={pkg_ana.get('threshold','?'):.2f}
 - Kombinácia: {pkg_kom.get('model_name','RF')} · AUC_CV={pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · {_n_feat} premenných · prah={pkg_kom.get('threshold','?'):.2f}
 
-**Výber prahu:** {_thr_note}
+**Modelové skóre (proba):** Výstupom modelu je číslo od 0 do 1 — odhadovaná pravdepodobnosť pozitívneho výsledku HUTT testu. Hodnota 0,60 znamená, že model odhaduje 60 % šancu pozitívneho výsledku. Nejde o klinicky kalibrovanú pravdepodobnosť.
+
+**Výber rozhodovacieho prahu:** Prah = {pkg_kom.get('threshold', 0.35):.2f}. {_thr_note} Pri tomto prahe: senzitivita {pkg_kom.get('sens_skrining','?')} %, špecificita {pkg_kom.get('spec_skrining','?')} % (testovacia sada, n={_n_te}).
 
 **Limitácie:** Interná validácia (1 centrum) · Nested CV na 80 % dát · Malý dataset (n={_n_total}) · Kalibrácia neoverená prospektívne.
 
