@@ -27,6 +27,32 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Globálny CSS – svetlý aj tmavý režim ─────────────────────────────────────
+st.markdown("""
+<style>
+:root {
+    --card-bg:     #fafafa;
+    --card-border: #e0e0e0;
+    --text-muted:  #666;
+    --text-faint:  #999;
+    --track-bg:    #e0e0e0;
+    --info-bg:     #eef2f7;
+    --info-text:   #1a1a2e;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --card-bg:     #1e2030;
+        --card-border: #3d4058;
+        --text-muted:  #b0b8d0;
+        --text-faint:  #7880a0;
+        --track-bg:    #3d4058;
+        --info-bg:     #1a2535;
+        --info-text:   #d0d8f0;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ── Cesty k modelom ─────────────────────────────────────────────────────────
 BASE     = os.path.dirname(os.path.abspath(__file__))
 PATH_ANA = os.path.join(BASE, "model_10f_anamneza.joblib")
@@ -240,17 +266,17 @@ def gauge_html(prob, label, subtext="", threshold=0.45):
     pct  = int(prob * 100)
     band, col = score_band(prob, threshold)
     return f"""
-    <div style='text-align:center; padding:12px; background:#fafafa;
-                border-radius:10px; border:1px solid #eee;'>
-      <div style='font-size:0.85em; color:#888; margin-bottom:4px;'>{label}</div>
+    <div style='text-align:center; padding:12px; background:var(--card-bg);
+                border-radius:10px; border:1px solid var(--card-border);'>
+      <div style='font-size:0.85em; color:var(--text-muted); margin-bottom:4px;'>{label}</div>
       <div style='font-size:3em; font-weight:bold; color:{col}; line-height:1.1;'>{pct}%</div>
-      <div style='background:#e8e8e8; border-radius:8px; height:12px; margin:8px 4px;'>
+      <div style='background:var(--track-bg); border-radius:8px; height:12px; margin:8px 4px;'>
         <div style='background:{col}; width:{pct}%; height:12px;
                     border-radius:8px; transition:width 0.6s;'></div>
       </div>
       <div style='font-size:0.82em; font-weight:bold; color:{col}; margin-top:4px;'>
         Pásmo: {band}</div>
-      <div style='font-size:0.78em; color:#aaa;'>{subtext}</div>
+      <div style='font-size:0.78em; color:var(--text-faint);'>{subtext}</div>
     </div>"""
 
 def verdict_html(prob, threshold=0.45):
@@ -450,7 +476,7 @@ if page == 0:
                         unsafe_allow_html=True)
         with c2:
             st.markdown("""
-            <div style='padding:12px; background:#f0f4f8; border-radius:8px; margin-top:10px;'>
+            <div style='padding:12px; background:var(--info-bg); color:var(--info-text); border-radius:8px; margin-top:10px;'>
             <b>Čo tento výsledok znamená?</b><br><br>
             Model vypočítal <b>orientačné modelové skóre</b> na základe
             <b>5 základných klinických meraní</b> (vek, pohlavie, TK, pulz).<br><br>
@@ -568,7 +594,7 @@ if page == 1:
                             unsafe_allow_html=True)
             with _cs2:
                 st.markdown("""
-                <div style='padding:12px; background:#f0f4f8; border-radius:8px; margin-top:10px;'>
+                <div style='padding:12px; background:var(--info-bg); color:var(--info-text); border-radius:8px; margin-top:10px;'>
                 <b>Čo tento výsledok znamená?</b><br><br>
                 Model vypočítal <b>spresnené modelové skóre</b> na základe
                 <b>anamnézy aj dotazníkových odpovedí</b>.<br><br>
@@ -669,7 +695,7 @@ if page == 2:
                          density=True, edgecolor="white", linewidth=0.5)
                 _ax.hist(_pos, bins=_bins, alpha=0.6, color="#e74c3c", label=f"HUTT+ (n={len(_pos)})",
                          density=True, edgecolor="white", linewidth=0.5)
-                _ax.axvline(prob_kom, color="#2c3e50", linewidth=2.5, linestyle="--",
+                _ax.axvline(prob_kom, color="#f39c12", linewidth=2.5, linestyle="--",
                             label=f"Váš pacient ({int(prob_kom*100)}%)")
                 _ax.axvline(pkg_kom["threshold"], color="#e67e22", linewidth=1.5, linestyle=":",
                             label=f"Prah ({int(pkg_kom['threshold']*100)}%)")
@@ -698,7 +724,7 @@ if page == 2:
                 _thr_r = round(pkg_kom["threshold"], 2)
                 def _highlight_row(row):
                     if round(row["Prah"], 2) == _thr_r:
-                        return ["background-color: #fff3cd; font-weight: bold"] * len(row)
+                        return ["background-color: #e67e22; color: white; font-weight: bold"] * len(row)
                     return [""] * len(row)
                 st.dataframe(_prah_filt.style.apply(_highlight_row, axis=1),
                              use_container_width=True, hide_index=True)
