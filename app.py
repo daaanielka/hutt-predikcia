@@ -420,14 +420,23 @@ if st.session_state.get("_last_page") != page:
     components.html("""
     <script>
     (function() {
-        var el = window.parent.document.querySelector('section[data-testid="stMain"]')
-              || window.parent.document.querySelector('.main')
-              || window.parent.document.body;
-        if (el) el.scrollTop = 0;
-        window.parent.scrollTo(0, 0);
+        var p = window.parent;
+        // Streamlit Cloud – hlavný scrollovateľný kontajner
+        var selectors = [
+            'section[data-testid="stMain"] > div',
+            'section[data-testid="stMain"]',
+            '.main > div',
+            '.main',
+            'body'
+        ];
+        for (var i = 0; i < selectors.length; i++) {
+            var el = p.document.querySelector(selectors[i]);
+            if (el) { el.scrollTop = 0; }
+        }
+        p.scrollTo(0, 0);
     })();
     </script>
-    """, height=0)
+    """, height=1)
 
 # ════════════════════════════════════════════════════════════════════════════
 # STRANA 1 – ANAMNESTICKÉ ÚDAJE
@@ -675,12 +684,11 @@ if page == 2:
 
         # ── Grafy ────────────────────────────────────────────────────────────
         st.markdown("---")
-        st.markdown("### 📊 Doplňujúce grafy")
-        _v1, _v2 = st.columns(2)
-
-        with _v1:
+        st.markdown("### 📊 Distribúcia modelového skóre")
+        st.caption("Kde sa váš pacient nachádza oproti HUTT+ a HUTT− pacientom z trénovacej vzorky")
+        _gcol, _ = st.columns([2, 1])
+        with _gcol:
             st.markdown("**Distribúcia modelového skóre (trénovacie dáta)**")
-            st.caption("Kde sa váš pacient nachádza oproti HUTT+ a HUTT− pacientom")
             _pos = pkg_kom.get("train_proba_pos", [])
             _neg = pkg_kom.get("train_proba_neg", [])
             if _pos and _neg:
@@ -704,28 +712,6 @@ if page == 2:
                 plt.close(_fig)
             else:
                 st.info("Distribučné dáta nie sú dostupné.")
-
-        with _v2:
-            st.markdown("**Senzitivita / Špecificita pri rôznych prahoch**")
-            st.caption("Ako sa mení záchytnosť modelu pri zmene rozhodovacieho prahu")
-            _prah_data = pkg_kom.get("prah_table", [])
-            if _prah_data:
-                _prah_df = pd.DataFrame(_prah_data)
-                _show_thrs = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
-                _prah_df["thr_r"] = _prah_df["Prah"].round(2)
-                _prah_filt = _prah_df[_prah_df["thr_r"].isin(_show_thrs)].copy()
-                _prah_filt = _prah_filt[["thr_r", "Sens_%", "Spec_%", "FN", "FP"]].rename(columns={
-                    "thr_r": "Prah", "Sens_%": "Sens %", "Spec_%": "Spec %"})
-                _thr_r = round(pkg_kom["threshold"], 2)
-                def _highlight_row(row):
-                    if round(row["Prah"], 2) == _thr_r:
-                        return ["background-color: #e67e22; color: white; font-weight: bold"] * len(row)
-                    return [""] * len(row)
-                st.dataframe(_prah_filt.style.apply(_highlight_row, axis=1),
-                             use_container_width=True, hide_index=True)
-                st.caption(f"🟡 Žltý riadok = odporúčaný prah ({_thr_r}) · FN = zmeškaní HUTT+")
-            else:
-                st.info("Tabuľka prahov nie je dostupná.")
 
         # ── Model Card ───────────────────────────────────────────────────────
         st.markdown("---")
