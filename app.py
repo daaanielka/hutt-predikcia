@@ -11,7 +11,6 @@ Spustenie: streamlit run app_10d_demo.py
 """
 
 import streamlit as st
-import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import joblib, os
@@ -344,6 +343,7 @@ with st.sidebar:
         for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_open",
                     "step2_done", "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
             st.session_state.pop(key, None)
+        st.session_state["page"] = 0
         st.rerun()
 
 # ── Hlavička ─────────────────────────────────────────────────────────────────
@@ -359,21 +359,38 @@ if not models_loaded:
     st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════
-# ZÁLOŽKY
+# NAVIGÁCIA (namiesto st.tabs – programatické prepínanie cez session_state)
 # ════════════════════════════════════════════════════════════════════════════
 _ana_name = pkg_ana.get('model_name', 'ExtraTrees')
 _kom_name = pkg_kom.get('model_name', 'RF')
 
-tab1, tab2, tab3 = st.tabs([
-    "1 — Anamnéza",
-    f"2 — Dotazník ({N_DOT} otázok)",
-    "3 — Výsledky",
-])
+if "page" not in st.session_state:
+    st.session_state["page"] = 0
+
+_nav1, _nav2, _nav3 = st.columns(3)
+with _nav1:
+    if st.button("1 — Anamnéza", use_container_width=True,
+                 type="primary" if st.session_state["page"] == 0 else "secondary"):
+        st.session_state["page"] = 0
+        st.rerun()
+with _nav2:
+    if st.button(f"2 — Dotazník ({N_DOT} otázok)", use_container_width=True,
+                 type="primary" if st.session_state["page"] == 1 else "secondary"):
+        st.session_state["page"] = 1
+        st.rerun()
+with _nav3:
+    if st.button("3 — Výsledky", use_container_width=True,
+                 type="primary" if st.session_state["page"] == 2 else "secondary"):
+        st.session_state["page"] = 2
+        st.rerun()
+st.markdown("---")
+
+page = st.session_state["page"]
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 1 – ANAMNESTICKÉ ÚDAJE
+# STRANA 1 – ANAMNESTICKÉ ÚDAJE
 # ════════════════════════════════════════════════════════════════════════════
-with tab1:
+if page == 0:
     st.markdown("## Krok 1 — Anamnestické údaje")
     st.caption("Základné klinické merania dostupné pred HUTT testom")
 
@@ -425,14 +442,15 @@ with tab1:
                    f"Senzitivita=93% · Špecificita=23%")
         st.markdown("---")
         if st.button("📝 Prejsť na dotazník →", use_container_width=True):
-            st.session_state["goto_tab"] = 1
+            st.session_state["page"] = 1
+            st.rerun()
     else:
         st.info("Vyplňte údaje vyššie a stlačte **Vypočítaj predbežný výsledok**.")
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 – DOTAZNÍK
+# STRANA 2 – DOTAZNÍK
 # ════════════════════════════════════════════════════════════════════════════
-with tab2:
+if page == 1:
     if "prob_ana" not in st.session_state:
         st.warning("⚠️ Najprv vyplňte **Krok 1 — Anamnéza** a vypočítajte predbežný výsledok.")
     else:
@@ -514,13 +532,14 @@ with tab2:
             st.session_state["pred_kom"]      = pred_kom
             st.session_state["dotaznik_vals"] = dotaznik_vals
             st.session_state["n_vyplnene"]    = n_vyplnene
-            st.session_state["step2_done"]  = True
-            st.session_state["goto_tab"]    = 2  # automaticky prepni na záložku 3
+            st.session_state["step2_done"]    = True
+            st.session_state["page"]          = 2  # automaticky prepni na výsledky
+            st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 3 – FINÁLNY VÝSLEDOK
+# STRANA 3 – FINÁLNY VÝSLEDOK
 # ════════════════════════════════════════════════════════════════════════════
-with tab3:
+if page == 2:
     if not st.session_state.get("step2_done"):
         st.info("ℹ️ Výsledky sa zobrazia po vyplnení dotazníka v záložke **2 — Dotazník**.")
         if "prob_ana" in st.session_state:
@@ -699,23 +718,8 @@ Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
             for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_done",
                         "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
                 st.session_state.pop(key, None)
-            st.session_state["goto_tab"] = 0  # preskok späť na záložku 1
-
-# ── Automatické prepnutie záložky ────────────────────────────────────────────
-if "goto_tab" in st.session_state:
-    _tab_idx = st.session_state.pop("goto_tab")
-    components.html(f"""
-    <script>
-    setTimeout(function() {{
-        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
-        if (tabs && tabs.length > {_tab_idx}) {{
-            tabs[{_tab_idx}].click();
-        }}
-        window.parent.document.querySelector('section.main')?.scrollTo(0, 0);
-        window.parent.scrollTo(0, 0);
-    }}, 100);
-    </script>
-    """, height=0)
+            st.session_state["page"] = 0  # preskok späť na stranu 1
+            st.rerun()
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
