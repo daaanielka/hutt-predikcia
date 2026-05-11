@@ -397,6 +397,7 @@ with tab1:
         st.session_state["pred_ana"]   = pred_ana
         st.session_state["ana_inputs"] = (pohlavie_enc, vek, tk_sys, tk_dia, pulz)
         st.session_state["step2_done"] = False
+        st.session_state["goto_tab"]   = 1  # automaticky prepni na záložku 2
 
     if "prob_ana" in st.session_state:
         prob_ana = st.session_state["prob_ana"]
@@ -422,6 +423,10 @@ with tab1:
             """, unsafe_allow_html=True)
         st.caption(f"AUC_CV = {pkg_ana['AUC_CV']}% ± {pkg_ana.get('AUC_CV_std','?')}%  ·  "
                    f"Senzitivita=93% · Špecificita=23%")
+        st.markdown("---")
+        if st.button("📝 Prejsť na dotazník →", use_container_width=True):
+            st.session_state["goto_tab"] = 1
+            st.rerun()
     else:
         st.info("Vyplňte údaje vyššie a stlačte **Vypočítaj predbežný výsledok**.")
 
@@ -510,8 +515,8 @@ with tab2:
             st.session_state["pred_kom"]      = pred_kom
             st.session_state["dotaznik_vals"] = dotaznik_vals
             st.session_state["n_vyplnene"]    = n_vyplnene
-            st.session_state["step2_done"]    = True
-            st.success("✅ Hotovo! Prejdite na záložku **3 — Výsledky**.")
+            st.session_state["step2_done"]  = True
+            st.session_state["goto_tab"]    = 2  # automaticky prepni na záložku 3
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 3 – FINÁLNY VÝSLEDOK
@@ -696,6 +701,20 @@ Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
                         ans = "Áno" if val == 1.0 else ("Nie" if val == 0.0 else "Neznáme")
                     dot_display.append({"Otázka": label, "Odpoveď": ans})
                 st.table(pd.DataFrame(dot_display).set_index("Otázka"))
+
+# ── Automatické prepnutie záložky (JS injekcia) ──────────────────────────────
+if "goto_tab" in st.session_state:
+    _tab_idx = st.session_state.pop("goto_tab")
+    st.markdown(f"""
+    <script>
+    setTimeout(function() {{
+        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        if (tabs && tabs.length > {_tab_idx}) {{
+            tabs[{_tab_idx}].click();
+        }}
+    }}, 150);
+    </script>
+    """, unsafe_allow_html=True)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
