@@ -549,8 +549,35 @@ if page == 1:
             st.session_state["dotaznik_vals"] = dotaznik_vals
             st.session_state["n_vyplnene"]    = n_vyplnene
             st.session_state["step2_done"]    = True
-            st.session_state["page"]          = 2  # automaticky prepni na výsledky
-            st.rerun()
+            # ostaneme na strane 2, zobrazíme tlačidlo "Prejsť na výsledky"
+
+        if st.session_state.get("step2_done"):
+            _ana_name_s2 = pkg_ana.get('model_name', 'ExtraTrees')
+            _prob_kom_s2 = st.session_state["prob_kom"]
+            st.markdown("---")
+            st.markdown(f"### Spresnený výsledok — Kombinácia / {pkg_kom.get('model_name','RF')}")
+            _cs1, _cs2 = st.columns([1, 2])
+            with _cs1:
+                st.markdown(gauge_html(_prob_kom_s2, f"Kombinácia / {pkg_kom.get('model_name','RF')}",
+                                       f"prah={pkg_kom['threshold']:.2f} · 5+{N_DOT} premenných",
+                                       threshold=pkg_kom['threshold']),
+                            unsafe_allow_html=True)
+                st.markdown(verdict_html(_prob_kom_s2, threshold=pkg_kom['threshold']),
+                            unsafe_allow_html=True)
+            with _cs2:
+                st.markdown("""
+                <div style='padding:12px; background:#f0f4f8; border-radius:8px; margin-top:10px;'>
+                <b>Čo tento výsledok znamená?</b><br><br>
+                Model vypočítal <b>spresnené modelové skóre</b> na základe
+                <b>anamnézy aj dotazníkových odpovedí</b>.<br><br>
+                Pre porovnanie oboch modelov a doplňujúce grafy
+                prejdite na <b>3 — Výsledky</b>.
+                </div>
+                """, unsafe_allow_html=True)
+            st.markdown("---")
+            if st.button("📊 Prejsť na výsledky →", use_container_width=True):
+                st.session_state["page"] = 2
+                st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════
 # STRANA 3 – FINÁLNY VÝSLEDOK
