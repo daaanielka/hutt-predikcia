@@ -82,7 +82,11 @@ except Exception as e:
 
 # ── Vybrané dotazníkové atribúty – načítané priamo z modelu ────────────────
 # Zabezpečuje konzistenciu: ak sa model pretrénuje, zoznam sa automaticky aktualizuje
+_ANA_FEATS = {"Pohlavie_enc", "Vek", "TK_sys", "TK_dia", "Pulz"}
 SELECTED_DOT = pkg_kom.get("selected_dot_features", []) if models_loaded else []
+if not SELECTED_DOT and models_loaded:
+    # Fallback: všetky features modelu okrem anamnestických
+    SELECTED_DOT = [f for f in pkg_kom["features"] if f not in _ANA_FEATS]
 N_DOT = len(SELECTED_DOT)
 N_ANA = pkg_ana.get("n_ana", 5) if models_loaded else 5  # počet anamnestických premenných
 
@@ -494,7 +498,7 @@ if page == 0:
             </div>
             """, unsafe_allow_html=True)
         st.caption(f"AUC_CV = {pkg_ana['AUC_CV']}% ± {pkg_ana.get('AUC_CV_std','?')}%  ·  "
-                   f"Senzitivita=93% · Špecificita=23%")
+                   f"Senzitivita={pkg_ana.get('sens_skrining','?')}% · Špecificita={pkg_ana.get('spec_skrining','?')}%")
         st.markdown("---")
         if st.button("📝 Prejsť na dotazník →", use_container_width=True):
             st.session_state["page"] = 1
@@ -643,7 +647,7 @@ if page == 2:
             st.markdown(verdict_html(prob_kom, threshold=pkg_kom['threshold']),
                         unsafe_allow_html=True)
             st.caption(f"AUC_CV = {pkg_kom['AUC_CV']}% ± {pkg_kom.get('AUC_CV_std','?')}%  ·  "
-                       f"Senzitivita=95% · Špecificita=45%  ·  "
+                       f"Senzitivita={pkg_kom.get('sens_skrining','?')}% · Špecificita={pkg_kom.get('spec_skrining','?')}%  ·  "
                        f"dotazník: {n_vyplnene}/{N_DOT} otázok vyplnených")
 
         # ── Zhoda modelov ────────────────────────────────────────────────────
@@ -726,29 +730,33 @@ if page == 2:
         # ── Model Card ───────────────────────────────────────────────────────
         st.markdown("---")
         with st.expander("📄 Model Card – informácie o modeli"):
-            _n_feat   = N_ANA + N_DOT
-            _thr_note = pkg_kom.get('threshold_note', '')
+            _n_feat    = N_ANA + N_DOT
+            _thr_note  = pkg_kom.get('threshold_note', '')
+            _n_tr      = pkg_kom.get('n_train', 288)
+            _n_te      = pkg_kom.get('n_test',  73)
+            _n_total   = _n_tr + _n_te
             st.markdown(f"""
 **Cieľ modelu:** Orientačný odhad pravdepodobnosti pozitívneho výsledku HUTT testu.
 
-**Trénovacie dáta:** n=371 pacientov, jedno centrum (SR), retrospektívna štúdia.
-Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
+**Trénovacie dáta:** n={_n_total} pacientov (A10=0/1), jedno centrum (SR), retrospektívna štúdia.
+Trénovacia sada: n={_n_tr} (80 %) · Testovacia sada: n={_n_te} (20 %).
 
 **Modely:**
-- Anamnéza: {pkg_ana.get('model_name','ExtraTrees')} · AUC_CV={pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · {N_ANA} premenných · prah={pkg_ana.get('threshold','?'):.2f}
-- Kombinácia: {pkg_kom.get('model_name','RF')} · AUC_CV={pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · {_n_feat} premenných · prah={pkg_kom.get('threshold','?'):.2f}
+- Anamnéza: {pkg_ana.get('model_name','ExtraTrees')} · AUC_CV={pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · {N_ANA} premenných · prah={pkg_ana.get('threshold','?'):.2f} · Sens={pkg_ana.get('sens_skrining','?')}% · Spec={pkg_ana.get('spec_skrining','?')}%
+- Kombinácia: {pkg_kom.get('model_name','RF')} · AUC_CV={pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · {_n_feat} premenných · prah={pkg_kom.get('threshold','?'):.2f} · Sens={pkg_kom.get('sens_skrining','?')}% · Spec={pkg_kom.get('spec_skrining','?')}%
 
 **Výber prahu:** {_thr_note}
 
-**Limitácie:** Interná validácia (1 centrum) · Nested CV na 80 % dát · Malý dataset (n=371) · Kalibrácia neoverená prospektívne.
+**Limitácie:** Interná validácia (1 centrum) · Nested CV na 80 % dát · Malý dataset (n={_n_total}) · Kalibrácia neoverená prospektívne.
 
 **Zakázané použitie:** Nenahradzuje klinické vyšetrenie ani rozhodnutie lekára.
             """)
 
         # ── Disclaimer ───────────────────────────────────────────────────────
         st.info(
-            "ℹ️ Výskumný prototyp — nie klinicky validovaný diagnostický nástroj. "
-            "Modely validované interne na n=371 pacientoch (n_test=74). "
+            f"ℹ️ Výskumný prototyp — nie klinicky validovaný diagnostický nástroj. "
+            f"Modely validované interne na n={pkg_kom.get('n_train',288)+pkg_kom.get('n_test',73)} pacientoch "
+            f"(n_test={pkg_kom.get('n_test',73)}). "
             "Externá validácia chýba. Výsledok **nenahradzuje klinické rozhodnutie lekára**."
         )
 

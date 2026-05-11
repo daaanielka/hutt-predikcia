@@ -464,6 +464,11 @@ inner_cv  = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED+1)
 
 X_kom_full_tr = df_valid[KOMBINACIA_KAND].values[tr_idx].astype(float)
 
+# POZOR: Nested CV prebieha len na trénovacej sade (80 % datasetu, n=len(tr_idx)).
+# Každý vonkajší fold má validačnú vzorku ~n/5. Toto obmedzenie treba uviesť v texte práce.
+print(f"  POZOR: Nested CV prebieha na n={len(tr_idx)} vzorkách (80 % datasetu).")
+print(f"  Každý vonkajší fold má n_val ≈ {len(tr_idx)//5} vzoriek – interpretovať s opatrnosťou.")
+
 nested_results = {}   # {model_name: {'fold_aucs':[], 'fold_sens':[], 'fold_spec':[], 'fold_thrs':[]}}
 
 for mname, base_clf, needs_scale in MODEL_DEFS:
@@ -732,6 +737,10 @@ print("\n" + "="*70)
 print("  SEKCIA 6: VYBER KANDIDATSKEHO MODELU (automaticky – max AUC_CV)")
 print("="*70)
 
+# POZOR: Nested CV odhad existuje len pre modely v NESTED_CV_MODELS (5 modelov).
+# Výber víťaza prebieha zo všetkých modelov podľa optimistického AUC_CV (5-fold CV).
+# Pre zvyšných 15 modelov teda existuje model selection bias.
+# Akceptovateľné pre bakalársku prácu – uviesť ako limitáciu v texte.
 best_cv = -1; best_key = None
 for gname, mods in all_results.items():
     for mname, r in mods.items():
