@@ -299,10 +299,10 @@ def tristate(label, key):
     Tri stavy: Neznáme = NaN (imputácia), Áno = 1.0, Nie = 0.0.
     Ak symptóm nebol prítomný → zvoľte Nie. Ak neviete → Neznáme.
     """
-    opt = st.radio(label, ["❓ Neznáme", "✅ Áno", "☐ Nie"],
+    opt = st.radio(label, ["❓ Neznáme", "✅ Áno", "✗ Nie"],
                    horizontal=True, key=key, index=0)
     if opt == "✅ Áno": return 1.0
-    if opt == "☐ Nie":  return 0.0
+    if opt == "✗ Nie":  return 0.0
     return np.nan
 
 def build_kom_input(pohlavie_enc, vek, tk_sys, tk_dia, pulz, dotaznik_vals):
@@ -530,12 +530,12 @@ if page == 1:
         )
         st.caption("💡 **Návod:** Ak symptóm nebol prítomný → zvoľte **Nie**. "
                    "Ak informácia nie je dostupná → zvoľte **Neznáme**. "
-                   "Pre C2 nechajte hodnotu **0** ak počet nie je známy.")
+                   "Pre C2 zaškrtnite **Neznáme** ak počet odpadnutí nie je známy.")
 
         NUMERIC_INPUTS = {
             "C1": {"label": "C1 – Vek pri prvom výskyte ťažkostí (roky)",
                    "min": 1, "max": 100, "default": 1, "step": 1},
-            "C2": {"label": "C2 – Celkový počet odpadnutí (0 = neznáme)",
+            "C2": {"label": "C2 – Celkový počet odpadnutí",
                    "min": 0, "max": 200, "default": 0, "step": 1},
             "C4": {"label": "C4 – Vek v období najhorších ťažkostí (roky)",
                    "min": 1, "max": 100, "default": 1, "step": 1},
@@ -568,13 +568,17 @@ if page == 1:
                     with cols[i % 2]:
                         if kod in NUMERIC_INPUTS:
                             cfg = NUMERIC_INPUTS[kod]
-                            val = st.number_input(cfg["label"], min_value=cfg["min"],
-                                                  max_value=cfg["max"], value=cfg["default"],
-                                                  step=cfg["step"], key=f"q2_{kod}")
-                            # C2=0 znamená "neznáme" → NaN (rovnaká imputácia ako pri chýbajúcej hodnote)
-                            if kod == "C2" and val == 0:
-                                dotaznik_vals[kod] = np.nan
+                            if kod == "C2":
+                                # Checkbox pre neznáme + number input (0 je platná hodnota)
+                                _c2_unk = st.checkbox("Neznáme", key="q2_C2_unk")
+                                _c2_val = st.number_input(cfg["label"], min_value=cfg["min"],
+                                                          max_value=cfg["max"], value=cfg["default"],
+                                                          step=cfg["step"], key="q2_C2")
+                                dotaznik_vals[kod] = np.nan if _c2_unk else float(_c2_val)
                             else:
+                                val = st.number_input(cfg["label"], min_value=cfg["min"],
+                                                      max_value=cfg["max"], value=cfg["default"],
+                                                      step=cfg["step"], key=f"q2_{kod}")
                                 dotaznik_vals[kod] = float(val) if val is not None else np.nan
                         else:
                             label = OTAZKY.get(kod, f"{kod} – [doplňte text otázky]")
@@ -685,7 +689,7 @@ if page == 2:
         # ── Grafy ────────────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("### 📊 Distribúcia modelového skóre")
-        st.caption("Kde sa váš pacient nachádza oproti HUTT+ a HUTT− pacientom z trénovacej vzorky")
+        st.caption("Kde sa váš pacient nachádza oproti HUTT− a HUTT+ pacientom z trénovacej vzorky")
         _gcol, _ = st.columns([2, 1])
         with _gcol:
             st.markdown("**Distribúcia modelového skóre (trénovacie dáta)**")
@@ -728,8 +732,8 @@ if page == 2:
 Trénovacia sada: n={_n_tr} (80 %) · Testovacia sada: n={_n_te} (20 %).
 
 **Modely:**
-- Anamnéza: {pkg_ana.get('model_name','ExtraTrees')} · AUC_CV={pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · {N_ANA} premenných · prah={pkg_ana.get('threshold','?'):.2f} · Sens={pkg_ana.get('sens_skrining','?')}% · Spec={pkg_ana.get('spec_skrining','?')}%
-- Kombinácia: {pkg_kom.get('model_name','RF')} · AUC_CV={pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · {_n_feat} premenných · prah={pkg_kom.get('threshold','?'):.2f} · Sens={pkg_kom.get('sens_skrining','?')}% · Spec={pkg_kom.get('spec_skrining','?')}%
+- Anamnéza: {pkg_ana.get('model_name','ExtraTrees')} · AUC_CV={pkg_ana.get('AUC_CV','?')}% ± {pkg_ana.get('AUC_CV_std','?')}% · {N_ANA} premenných · prah={pkg_ana.get('threshold','?'):.2f}
+- Kombinácia: {pkg_kom.get('model_name','RF')} · AUC_CV={pkg_kom.get('AUC_CV','?')}% ± {pkg_kom.get('AUC_CV_std','?')}% · {_n_feat} premenných · prah={pkg_kom.get('threshold','?'):.2f}
 
 **Výber prahu:** {_thr_note}
 
