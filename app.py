@@ -299,10 +299,10 @@ def tristate(label, key):
     Tri stavy: Neznáme = NaN (imputácia), Áno = 1.0, Nie = 0.0.
     Ak symptóm nebol prítomný → zvoľte Nie. Ak neviete → Neznáme.
     """
-    opt = st.radio(label, ["❓ Neznáme", "✅ Áno", "✗ Nie"],
+    opt = st.radio(label, ["❓ Neznáme", "✅ Áno", "❌ Nie"],
                    horizontal=True, key=key, index=0)
     if opt == "✅ Áno": return 1.0
-    if opt == "✗ Nie":  return 0.0
+    if opt == "❌ Nie":  return 0.0
     return np.nan
 
 def build_kom_input(pohlavie_enc, vek, tk_sys, tk_dia, pulz, dotaznik_vals):
@@ -524,7 +524,7 @@ if page == 1:
     else:
         st.markdown(f"## Krok 2 — Dotazníkové otázky ({N_DOT} otázok)")
         st.caption(
-            "Odpovede: ✅ = Áno · ✗ = Nie · ❓ = Neznáme  |  "
+            "Odpovede: ✅ = Áno · ❌ = Nie · ❓ = Neznáme  |  "
             "Neznáme hodnoty sú nahradené mediánom z trénovacej vzorky. "
             "Pri väčšom počte neznámych odpovedí je výsledok menej spoľahlivý."
         )
