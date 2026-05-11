@@ -524,7 +524,7 @@ if page == 1:
     else:
         st.markdown(f"## Krok 2 — Dotazníkové otázky ({N_DOT} otázok)")
         st.caption(
-            "Odpovede: ✅ = Áno · ☐ = Nie · ❓ = Neznáme  |  "
+            "Odpovede: ✅ = Áno · ✗ = Nie · ❓ = Neznáme  |  "
             "Neznáme hodnoty sú nahradené mediánom z trénovacej vzorky. "
             "Pri väčšom počte neznámych odpovedí je výsledok menej spoľahlivý."
         )

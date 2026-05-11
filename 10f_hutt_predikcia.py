@@ -704,7 +704,7 @@ for gname, gcfg in GROUPS.items():
 
         k_str = f" K={k_opt}" if k_opt is not None else ""
         all_results[gname][mname] = {
-            'AUC_test':m['AUC'],'AUC_CV':cv_scores.mean(),'AUC_CV_std':cv_scores.std(),
+            'AUC_test':m['AUC'],'AUC_CV':cv_scores.mean(),'AUC_CV_std':cv_scores.std(ddof=1),
             'cv_scores': cv_scores,
             'Sens':m['Sens'],'Spec':m['Spec'],'F1':m['F1'],'Acc':m['Acc'],
             'TP':m['TP'],'FP':m['FP'],'FN':m['FN'],'TN':m['TN'],
@@ -712,14 +712,14 @@ for gname, gcfg in GROUPS.items():
             'threshold': opt_thr_cv,
         }
         print(f"    {mname:<16}{k_str:<7} AUC_test={m['AUC']*100:.1f}%  "
-              f"CV={cv_scores.mean()*100:.1f}+/-{cv_scores.std()*100:.1f}%  "
+              f"CV={cv_scores.mean()*100:.1f}+/-{cv_scores.std(ddof=1)*100:.1f}%  "
               f"Prah={opt_thr_cv:.2f}  Sens={m['Sens']*100:.1f}%  Spec={m['Spec']*100:.1f}%")
 
         rows_csv.append({
             "Skupina":gname,"Model":mname,"K_opt":k_opt,
             "AUC_test_%":round(m['AUC']*100,1),
             "AUC_CV_%":round(cv_scores.mean()*100,1),
-            "AUC_CV_std_%":round(cv_scores.std()*100,1),
+            "AUC_CV_std_%":round(cv_scores.std(ddof=1)*100,1),
             "Threshold_CV":round(opt_thr_cv,3),
             "Sens_%":round(m['Sens']*100,1),"Spec_%":round(m['Spec']*100,1),
             "F1_%":round(m['F1']*100,1),"Acc_%":round(m['Acc']*100,1),
