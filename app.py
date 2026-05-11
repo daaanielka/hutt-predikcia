@@ -11,6 +11,7 @@ Spustenie: streamlit run app_10d_demo.py
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import joblib, os
@@ -426,7 +427,6 @@ with tab1:
         st.markdown("---")
         if st.button("📝 Prejsť na dotazník →", use_container_width=True):
             st.session_state["goto_tab"] = 1
-            st.rerun()
     else:
         st.info("Vyplňte údaje vyššie a stlačte **Vypočítaj predbežný výsledok**.")
 
@@ -702,19 +702,19 @@ Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
                     dot_display.append({"Otázka": label, "Odpoveď": ans})
                 st.table(pd.DataFrame(dot_display).set_index("Otázka"))
 
-# ── Automatické prepnutie záložky (JS injekcia) ──────────────────────────────
+# ── Automatické prepnutie záložky ────────────────────────────────────────────
 if "goto_tab" in st.session_state:
     _tab_idx = st.session_state.pop("goto_tab")
-    st.markdown(f"""
+    components.html(f"""
     <script>
     setTimeout(function() {{
         var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
         if (tabs && tabs.length > {_tab_idx}) {{
             tabs[{_tab_idx}].click();
         }}
-    }}, 150);
+    }}, 100);
     </script>
-    """, unsafe_allow_html=True)
+    """, height=0)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
