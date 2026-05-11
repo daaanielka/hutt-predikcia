@@ -69,10 +69,11 @@ N_ANA             = 5   # počet anamnestických atribútov – vždy zahrnuté
 APP_ANA_MODEL = "ExtraTrees"
 APP_KOM_MODEL = "RF"
 
-# discrete_features=True: MI sa počíta len pre dotazníkové (binárne) atribúty cez ColumnTransformer.
+# discrete_features='auto': sklearn automaticky rozlíši diskrétne (binárne checkbox) vs. spojité
+# (C1=vek pri výskyte, C2=počet odpadnutí, C4=vek v období ťažkostí) podľa hodnôt.
+# Pôvodné discrete_features=True bolo nesprávne pre C1/C2/C4, ktoré sú numerické.
 # Anamnestické spojité premenné (Vek, TK, Pulz) prechádzajú passthrough – MI sa na ne neaplikuje.
-# Toto nastavenie je teda korektné pre danú architektúru pipeline.
-MI_SCORE = partial(mutual_info_classif, random_state=SEED, discrete_features=True)
+MI_SCORE = partial(mutual_info_classif, random_state=SEED, discrete_features='auto')
 
 # ==============================================================================
 # SEKCIA 1: NAČÍTANIE A PREDSPRACOVANIE
