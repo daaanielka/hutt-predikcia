@@ -366,7 +366,7 @@ with st.sidebar:
     Nenahradzuje klinické rozhodnutie.*
     """)
     st.markdown("---")
-    if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
+    if st.button("🔄 Nový pacient", use_container_width=True, type="primary", key="btn_novy_sidebar"):
         for key in list(st.session_state.keys()):
             if key.startswith("q2_") or key in {
                 "prob_ana", "pred_ana", "ana_inputs", "step2_open",
@@ -601,7 +601,7 @@ if page == 2:
             st.markdown("## Finálny výsledok — Porovnanie modelov")
         with _btn_col:
             st.markdown("<div style='padding-top:8px;'>", unsafe_allow_html=True)
-            if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
+            if st.button("🔄 Nový pacient", use_container_width=True, type="primary", key="btn_novy_top"):
                 for key in list(st.session_state.keys()):
                     if key.startswith("q2_") or key in {
                         "prob_ana", "pred_ana", "ana_inputs", "step2_open",
@@ -767,7 +767,7 @@ Trénovacia sada: n=297 (80 %) · Testovacia sada: n=74 (20 %).
 
         # ── Nový pacient ─────────────────────────────────────────────────────
         st.markdown("---")
-        if st.button("🔄 Nový pacient", use_container_width=True, type="primary"):
+        if st.button("🔄 Nový pacient", use_container_width=True, type="primary", key="btn_novy_bottom"):
             for key in ["prob_ana", "pred_ana", "ana_inputs", "step2_done",
                         "prob_kom", "pred_kom", "dotaznik_vals", "n_vyplnene"]:
                 st.session_state.pop(key, None)
