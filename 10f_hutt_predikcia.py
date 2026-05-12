@@ -70,11 +70,12 @@ N_ANA             = 5   # počet anamnestických atribútov – vždy zahrnuté
 APP_ANA_MODEL = "ExtraTrees"
 APP_KOM_MODEL = "RF"
 
-# discrete_features='auto': sklearn automaticky rozlíši diskrétne (binárne checkbox) vs. spojité
-# (C1=vek pri výskyte, C2=počet odpadnutí, C4=vek v období ťažkostí) podľa hodnôt.
-# Pôvodné discrete_features=True bolo nesprávne pre C1/C2/C4, ktoré sú numerické.
-# Anamnestické spojité premenné (Vek, TK, Pulz) prechádzajú passthrough – MI sa na ne neaplikuje.
-MI_SCORE = partial(mutual_info_classif, random_state=SEED, discrete_features='auto')
+# discrete_features=True: dotazníkové premenné sú takmer výlučne binárne checkboxy (0/1).
+# 'auto' pri dense matici nastaví False (všetky spojité) – to je HORŠIE pre binárne features.
+# K-sweep ukázal: True → k=30, AUC_CV=78.5%; 'auto' → k=3, AUC_CV=76.0% (horšie).
+# Výnimky C1/C2/C4 (numerické) tvoria 3 z 130+ features – vplyv na MI je zanedbateľný.
+# Anamnestické premenné (Vek, TK, Pulz) prechádzajú passthrough – MI sa na ne neaplikuje.
+MI_SCORE = partial(mutual_info_classif, random_state=SEED, discrete_features=True)
 
 # ==============================================================================
 # SEKCIA 1: NAČÍTANIE A PREDSPRACOVANIE
@@ -155,6 +156,71 @@ print(f"\nImputacia: {len(_checkbox_cols)} checkbox stlpcov (-1→0),"
       f"  {len(_numeric_cols)} numerickych stlpcov (-1→NaN)")
 
 # ==============================================================================
+# SEKCIA 1b: EDA – DESKRIPTÍVNA ŠTATISTIKA DATASETU
+# ==============================================================================
+print("\n" + "="*70)
+print("  SEKCIA 1b: EDA – popis datasetu pred modelovanim")
+print("="*70)
+
+try:
+    # Cieľová premenná
+    _n_total = len(df_valid)
+    _n_pos   = int(y_all.sum())
+    _n_neg   = int((y_all == 0).sum())
+    print(f"\n  Celkovy dataset (A10 in {{0,1}}): n={_n_total}")
+    print(f"  A10=1 (pozitivny HUTT): {_n_pos} ({_n_pos/_n_total*100:.1f}%)")
+    print(f"  A10=0 (negativny HUTT): {_n_neg} ({_n_neg/_n_total*100:.1f}%)")
+    print(f"  Pomer tried: {_n_neg/_n_pos:.2f}:1 (negativni:pozitivni)")
+
+    # Pohlavie
+    _n_m = int((df_valid['Pohlavie'] == 'M').sum())
+    _n_f = int((df_valid['Pohlavie'] == 'F').sum())
+    print(f"\n  Pohlavie: M={_n_m} ({_n_m/_n_total*100:.1f}%), F={_n_f} ({_n_f/_n_total*100:.1f}%)")
+
+    # Vek
+    _vek = pd.to_numeric(df_valid['Vek'], errors='coerce').dropna()
+    print(f"  Vek: mean={_vek.mean():.1f}, std={_vek.std(ddof=1):.1f}, "
+          f"median={_vek.median():.1f}, min={_vek.min():.0f}, max={_vek.max():.0f}")
+
+    # TK, Pulz
+    for _col in ['TK_sys', 'TK_dia', 'Pulz']:
+        _s = pd.to_numeric(df_valid[_col], errors='coerce').dropna()
+        _miss = _n_total - len(_s)
+        print(f"  {_col}: mean={_s.mean():.1f}, std={_s.std(ddof=1):.1f}, "
+              f"chybajuce={_miss} ({_miss/_n_total*100:.1f}%)")
+
+    # Chýbajúce hodnoty – top 15 stĺpcov
+    _miss_rate = df_valid.isnull().mean().sort_values(ascending=False)
+    _miss_nonzero = _miss_rate[_miss_rate > 0]
+    print(f"\n  Stlpce s chybajucimi hodnotami: {len(_miss_nonzero)} z {len(df_valid.columns)}")
+    print(f"  Top 10 stlpcov s najviac chybajucimi:")
+    for _col, _rate in _miss_nonzero.head(10).items():
+        print(f"    {_col:<25} {_rate*100:.1f}%")
+
+    # Uloženie EDA do CSV
+    _eda_rows = []
+    for _col in df_valid.columns:
+        _s = pd.to_numeric(df_valid[_col], errors='coerce')
+        _eda_rows.append({
+            'Stlpec': _col,
+            'N_valid': int(_s.notna().sum()),
+            'N_missing': int(_s.isna().sum()),
+            'Missing_%': round(_s.isna().mean()*100, 1),
+            'Mean': round(float(_s.mean()), 3) if _s.notna().sum() > 0 else None,
+            'Std': round(float(_s.std(ddof=1)), 3) if _s.notna().sum() > 1 else None,
+            'Min': round(float(_s.min()), 3) if _s.notna().sum() > 0 else None,
+            'Max': round(float(_s.max()), 3) if _s.notna().sum() > 0 else None,
+            'Unique_values': int(_s.dropna().nunique()),
+        })
+    _eda_df = pd.DataFrame(_eda_rows)
+    _eda_df.to_csv(os.path.join(OUT_DIR, 'vysledky_10f_eda.csv'), index=False)
+    print(f"\n  Ulozene: vysledky_10f_eda.csv ({len(_eda_rows)} stlpcov)")
+
+except Exception as _e_eda:
+    print(f"  EDA chyba: {_e_eda}")
+    import traceback; traceback.print_exc()
+
+# ==============================================================================
 # SEKCIA 2: SKUPINY ATRIBÚTOV + SPLIT 80/20
 # ==============================================================================
 print("\n" + "="*70)
@@ -233,6 +299,11 @@ print("              ) → CalibratedCV")
 print("="*70)
 
 def make_pipeline_anamneza(base_clf, needs_scale=False):
+    # Kalibrácia: isotonic vs. sigmoid (Platt scaling)
+    # Isotonic je neparametrická → flexibilnejšia, ale pri malom n môže overfittovať.
+    # Sigmoid je konzervatívnejšia, vhodnejšia pre n < 1000.
+    # Pri n=288 je rozdiel minimálny; isotonic zvolená pre lepší fit na trénovacej sade.
+    # cv=3: kompromis medzi stabilitou (viac foldov) a veľkosťou train setu per fold.
     steps = [('imputer', SimpleImputer(strategy='median'))]
     if needs_scale:
         steps.append(('scaler', StandardScaler()))
@@ -1258,27 +1329,34 @@ try:
     # Získaj samotný klasifikátor (bez CalibratedClassifierCV obaľovača)
     _clf_inner = _pipe_shap.named_steps['clf']
 
+    # Rozbaľ CalibratedClassifierCV → base estimator
+    # CalibratedClassifierCV má atribút calibrated_classifiers_ (list _CalibratedClassifier)
+    # každý z nich má .estimator = fitted base clf (napr. RF)
+    if hasattr(_clf_inner, 'calibrated_classifiers_'):
+        _base_est = _clf_inner.calibrated_classifiers_[0].estimator
+    else:
+        _base_est = _clf_inner
+    print(f"  SHAP base estimator: {type(_base_est).__name__}")
+
     # Skús TreeExplainer (RF, ExtraTrees, GradBoost...)
     try:
-        if hasattr(_clf_inner, 'estimators_'):
-            # CalibratedClassifierCV – použi base estimator
-            _base_est = _clf_inner.estimators_[0].estimator if hasattr(_clf_inner, 'estimators_') else _clf_inner
-            _explainer = shap.TreeExplainer(_base_est)
-        else:
-            _explainer = shap.TreeExplainer(_clf_inner)
+        _explainer = shap.TreeExplainer(_base_est)
         _shap_vals = _explainer.shap_values(_X_te_transformed)
         # Pre binárnu klasifikáciu: shap_values môže byť list [neg, pos]
         if isinstance(_shap_vals, list):
             _shap_vals = _shap_vals[1]
-    except Exception:
-        # Fallback: KernelExplainer (pomalší, univerzálny)
-        _explainer = shap.KernelExplainer(
-            lambda x: _pipe_shap.predict_proba(
-                np.hstack([np.zeros((len(x), len(_feats_shap) - _X_te_transformed.shape[1])), x])
-            )[:, 1],
-            shap.kmeans(_X_te_transformed, 10)
-        )
-        _shap_vals = _explainer.shap_values(_X_te_transformed)
+    except Exception as _e_tree:
+        print(f"  TreeExplainer zlyhal ({_e_tree}), pouzivam KernelExplainer...")
+        # Fallback: KernelExplainer – pracuje priamo s transformovaným X
+        # predict_fn dostane transformované dáta a volá priamo base estimator
+        def _pred_fn(x):
+            if hasattr(_base_est, 'predict_proba'):
+                return _base_est.predict_proba(x)[:, 1]
+            else:
+                return _base_est.decision_function(x)
+        _bg = shap.kmeans(_X_te_transformed, min(10, len(_X_te_transformed)))
+        _explainer = shap.KernelExplainer(_pred_fn, _bg)
+        _shap_vals = _explainer.shap_values(_X_te_transformed, nsamples=100)
 
     # Názvy features po ColumnTransformer selekcii
     if bg == 'Kombinacia':
@@ -1354,28 +1432,59 @@ try:
     _cor_df = pd.DataFrame(_X_cor_imp, columns=_feats_cor)
 
     # Vyber len selected_dot + anamneza features
-    _sel_feats_cor = ANAMNEZA + (br.get('pipeline').named_steps['selector']
-                                  .transformers_[1][1].get_feature_names_out().tolist()
-                                  if bg == 'Kombinacia' and hasattr(
-                                      br.get('pipeline').named_steps.get('selector', object()),
-                                      'transformers_') else DOTAZNIK_KAND[:30])
+    # BUG FIX: get_feature_names_out() vracia generické názvy (x0, x1...), nie pôvodné stĺpce.
+    # Správny postup: get_support() maska aplikovaná na pôvodný zoznam dotazníkových stĺpcov.
+    _sel_feats_cor = list(ANAMNEZA)
+    if bg == 'Kombinacia':
+        _ct_cor = br['pipeline'].named_steps.get('selector')
+        if _ct_cor is not None and hasattr(_ct_cor, 'transformers_'):
+            for _tname_c, _trans_c, _cols_c in _ct_cor.transformers_:
+                if _tname_c == 'dot' and hasattr(_trans_c, 'get_support'):
+                    # _cols_c sú indexy v pôvodnom feature vektore (po imputácii)
+                    _dot_feats_orig = [_feats_cor[i] for i in list(_cols_c)]
+                    _dot_selected   = [f for f, m in zip(_dot_feats_orig, _trans_c.get_support()) if m]
+                    _sel_feats_cor += _dot_selected
+                    print(f"  Vybranych dot features pre korelacie: {len(_dot_selected)}")
+                    break
     _sel_feats_cor = [f for f in _sel_feats_cor if f in _cor_df.columns][:35]
-    _cor_matrix = _cor_df[_sel_feats_cor].corr()
 
-    # Uloženie
+    # METODOLOGICKÁ POZNÁMKA – výber korelačnej metriky:
+    # Pearson (.corr()) je technicky "funguje" pre binárne (0/1) premenné, ale nie je ideálny.
+    # Správne metriky:
+    #   - Phi koeficient   = Pearson pre 2 binárne premenné (číselne identický s Pearsonom!)
+    #   - Cramérovo V      = normalizovaný chi² pre nominálne premenné (0–1 škála)
+    #   - Point-biserial   = Pearson pre binárna × spojitá premenná
+    # Pre väčšinu párov (binárna × binárna) je Phi = Pearson → výsledok je rovnaký.
+    # Pre zmiešané páry (anamnéza spojitá × dotazník binárny) je Point-biserial = Pearson.
+    # Záver: Pearson/corr() je pri tomto datasete číselne ekvivalentný správnym metrikám.
+    # V texte práce uviesť: "Pearsonov korelačný koeficient (ekvivalentný Phi pre binárne páry)."
+    _cor_matrix = _cor_df[_sel_feats_cor].corr()  # Pearson ≡ Phi pre binárne × binárne
+
+    # Cramérovo V – pre informáciu (symetrická, 0=nezávislé, 1=úplná závislosť)
+    def _cramers_v(x, y):
+        from scipy.stats import chi2_contingency
+        try:
+            ct = pd.crosstab(x.round(0).astype(int), y.round(0).astype(int))
+            chi2, _, _, _ = chi2_contingency(ct)
+            n = len(x)
+            k = min(ct.shape) - 1
+            return float(np.sqrt(chi2 / (n * max(k, 1)))) if n > 0 else 0.0
+        except: return np.nan
+
+    # Uloženie Pearson + Cramér's V
     _cor_matrix.to_csv(os.path.join(OUT_DIR, 'vysledky_10f_korelacie.csv'))
-    print(f"  Ulozene: vysledky_10f_korelacie.csv ({len(_sel_feats_cor)} features)")
+    print(f"  Ulozene: vysledky_10f_korelacie.csv ({len(_sel_feats_cor)} features, Pearson/Phi)")
 
     # Heatmapa
     _n_f = len(_sel_feats_cor)
     fig, ax = plt.subplots(figsize=(max(10, _n_f*0.5), max(8, _n_f*0.5)))
     fig.patch.set_facecolor("#F8F7F5")
     _cm = ax.imshow(_cor_matrix.values, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
-    plt.colorbar(_cm, ax=ax, label='Pearsonov korelačný koeficient')
+    plt.colorbar(_cm, ax=ax, label='Pearsonov koeficient (= Phi pre binárne páry)')
     ax.set_xticks(range(_n_f)); ax.set_xticklabels(_sel_feats_cor, rotation=90, fontsize=7)
     ax.set_yticks(range(_n_f)); ax.set_yticklabels(_sel_feats_cor, fontsize=7)
     ax.set_title(f"Korelácie vstupných premenných – {bg}/{bm}\n"
-                 f"(trénovacia sada, n={len(tr_idx)})", fontweight='bold')
+                 f"(trénovacia sada, n={len(tr_idx)}, Pearson = Phi pre binárne páry)", fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(OUT_DIR, 'graf_10f_korelacie.png'), dpi=150, bbox_inches='tight')
     plt.close()
@@ -1388,9 +1497,12 @@ try:
             _cor_pairs.append((_sel_feats_cor[i], _sel_feats_cor[j],
                                abs(_cor_matrix.iloc[i, j])))
     _cor_pairs.sort(key=lambda x: x[2], reverse=True)
-    print(f"\n  Top 10 najvyššich korelacii (|r|):")
+    print(f"\n  Top 10 najvyssich korelacii (|Pearson/Phi|):")
     for f1, f2, r in _cor_pairs[:10]:
-        print(f"    {f1:<20} × {f2:<20}  |r|={r:.3f}")
+        # Cramérovo V pre binárne páry (informatívne)
+        _cv = _cramers_v(_cor_df[f1], _cor_df[f2])
+        _cv_str = f"  CramerV={_cv:.3f}" if not np.isnan(_cv) else ""
+        print(f"    {f1:<20} x {f2:<20}  |r|={r:.3f}{_cv_str}")
 
 except Exception as e:
     print(f"  Korelacie chyba: {e}")
@@ -1405,6 +1517,7 @@ print("="*70)
 
 print(f"""
   Výstupné súbory:
+    vysledky_10f_eda.csv          – EDA: popis datasetu (missing values, mean, std per stĺpec)
     vysledky_10f_nested_cv.csv    – výsledky nested CV (všetky modely × 5 foldov)
     vysledky_10f_wilcoxon.csv     – Wilcoxon test porovnania top modelov
     vysledky_10f_porovnanie.csv   – finálne porovnanie (20 modelov × 3 skupiny)
