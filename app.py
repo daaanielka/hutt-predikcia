@@ -173,6 +173,15 @@ REQUIRED_KEYS = {"pipeline", "features", "threshold", "model_name"}
 ANA_FEATURES = ["Pohlavie_enc", "Vek", "TK_sys", "TK_dia", "Pulz"]
 ANA_SET = set(ANA_FEATURES)
 
+# Mapovanie interných názvov na názvy formulára
+# (model P3 používa A2_sys/A2_dia/A3/Pohlavie namiesto TK_sys/TK_dia/Pulz/Pohlavie_enc)
+INTERNAL_TO_FORM = {
+    "A2_sys":   "TK_sys",
+    "A2_dia":   "TK_dia",
+    "A3":       "Pulz",
+    "Pohlavie": "Pohlavie_enc",
+}
+
 
 @st.cache_resource(show_spinner=False)
 def load_model_package(path: str):
@@ -197,48 +206,57 @@ except Exception as e:
 # =============================================================================
 FEATURE_LABELS = {
     "Pohlavie_enc": "Pohlavie",
-    "Vek": "Vek",
-    "TK_sys": "Systolický tlak krvi",
-    "TK_dia": "Diastolický tlak krvi",
-    "Pulz": "Pulz",
+    "Pohlavie":     "Pohlavie",
+    "Vek":          "Vek",
+    "TK_sys":       "Systolický tlak krvi",
+    "TK_dia":       "Diastolický tlak krvi",
+    "A2_sys":       "Systolický tlak krvi",
+    "A2_dia":       "Diastolický tlak krvi",
+    "Pulz":         "Pulz",
+    "A3":           "Pulz (tepová frekvencia)",
     "C1": "Vek pri prvom výskyte ťažkostí",
     "C2": "Celkový počet odpadnutí",
     "C4": "Vek v období najhorších ťažkostí",
     "D2": "Strata vedomia do 1 minúty po postavení sa",
-    "E": "Strata vedomia bola vyvolaná konkrétnym faktorom",
+    "D3": "Strata vedomia pri chôdzi",
+    "E":  "Strata vedomia bola vyvolaná konkrétnym faktorom",
     "E1": "Strata vedomia v preľudnených priestoroch",
     "E4": "Strata vedomia po pohľade na krv",
-    "E5": "Strata vedomia po nepríjemných emóciách",
+    "E5": "Strata vedomia po nepríjemných emóciách (strach, úzkosť)",
     "E7": "Strata vedomia po bolesti",
     "F1": "Strata vedomia pri stolici",
     "F2": "Strata vedomia pri močení",
     "F4": "Strata vedomia pri kýchaní alebo smrkaní",
-    "H": "Príznaky tesne pred stratou vedomia",
+    "H":  "Príznaky tesne pred stratou vedomia",
     "H1": "Nevoľnosť alebo vracanie pred stratou vedomia",
     "H3": "Potenie pred stratou vedomia",
+    "H4": "Zahmlievanie pred očami pred stratou vedomia",
     "H5": "Hučanie v ušiach pred stratou vedomia",
     "H13": "Pacient si nepamätá pocity pred stratou vedomia",
     "I1": "Príznaky trvali niekoľko sekúnd",
     "I2": "Príznaky trvali do 1 minúty",
-    "K": "Trvanie bezvedomia podľa svedkov",
+    "K":  "Trvanie bezvedomia podľa svedkov",
     "K4": "Bezvedomie trvalo viac ako 5 minút",
     "N1": "Pohryzený jazyk alebo pery po strate vedomia",
     "N6": "Pacient sa cítil normálne po prebratí",
     "O1": "Náhle úmrtie člena rodiny",
     "P5": "Koronárna choroba srdca v osobnej anamnéze",
     "P9": "Bolesti na hrudníku v osobnej anamnéze",
+    "P12": "Chlopňové ochorenie srdca v osobnej anamnéze",
     "P18": "Ochorenia priedušiek v osobnej anamnéze",
     "P27": "Depresia v osobnej anamnéze",
     "P31": "Nádorové ochorenie v osobnej anamnéze",
     "P33": "Prekonané úrazy v osobnej anamnéze",
+    "Ma_diag_srdcove_ochorenie": "Diagnostikované srdcové ochorenie (P1–P7)",
 }
 
 BLOCK_ORDER = [
     ("Vznik a charakter ťažkostí", ["C1", "C2", "C4"]),
-    ("Spúšťacie faktory", ["D2", "E", "E1", "E4", "E5", "E7", "F1", "F2", "F4"]),
-    ("Príznaky pred stratou vedomia", ["H", "H1", "H3", "H5", "H13", "I1", "I2"]),
+    ("Spúšťacie faktory", ["D2", "D3", "E", "E1", "E4", "E5", "E7", "F1", "F2", "F4"]),
+    ("Príznaky pred stratou vedomia", ["H", "H1", "H3", "H4", "H5", "H13", "I1", "I2"]),
     ("Priebeh a stav po udalosti", ["K", "K4", "N1", "N6"]),
-    ("Rodinná a osobná anamnéza", ["O1", "P5", "P9", "P18", "P27", "P31", "P33"]),
+    ("Rodinná a osobná anamnéza", ["O1", "P5", "P9", "P12", "P18", "P27", "P31", "P33"]),
+    ("Srdcové ochorenie (agregát)", ["Ma_diag_srdcove_ochorenie"]),
 ]
 
 NUMERIC_FEATURES = {"C1", "C2", "C4"}
@@ -353,7 +371,16 @@ def make_anamnesis_vector(values):
 
 def make_combined_vector(ana_values, dot_values):
     row = {f: np.nan for f in pkg_kom["features"]}
-    row.update(ana_values)
+    # Mapovanie anamnestických hodnôt (app names → internal names)
+    form_to_internal = {v: k for k, v in INTERNAL_TO_FORM.items()}
+    for app_k, val in ana_values.items():
+        # Priamo
+        if app_k in row:
+            row[app_k] = val
+        # Cez mapovaciu tabuľku (napr. TK_sys → A2_sys)
+        internal = form_to_internal.get(app_k)
+        if internal and internal in row:
+            row[internal] = val
     for k, v in dot_values.items():
         if k in row:
             row[k] = v
@@ -866,7 +893,7 @@ Model nebol externe prospektívne validovaný. Výstup predstavuje výskumný od
             n_total = pkg_kom.get("n_train") + pkg_kom.get("n_test")
         st.markdown(f"""
 **Účel:** Orientačný odhad modelového skóre pre pozitívny HUTT test.  
-**Cieľová premenná:** A10 – výsledok HUTT testu.  
+**Cieľová premenná:** Synkopa (0 = negatívny HUTT, 1 = pozitívny HUTT / VASIS).  
 **Anamnestický model:** {pkg_ana.get('model_name')} · prah {float(pkg_ana['threshold']):.2f}.  
 **Kombinovaný model:** {pkg_kom.get('model_name')} · prah {float(pkg_kom['threshold']):.2f}.  
 **Počet vstupných premenných v kombinovanom modeli:** {len(pkg_kom.get('features', []))}.  
