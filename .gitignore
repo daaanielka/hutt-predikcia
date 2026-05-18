@@ -1,0 +1,18 @@
+# Citlivé údaje – NIKDY na GitHub
+.streamlit/secrets.toml
+data_full1.csv
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# IDE a nástroje
+.idea/
+.claude/
+
+# OS súbory
+.DS_Store
+Thumbs.db
+desktop.ini
