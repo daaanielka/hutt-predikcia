@@ -23,86 +23,10 @@ import streamlit.components.v1 as components
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import MinMaxScaler, RobustScaler
-from sklearn.feature_selection import RFE
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
-
-# ---------------------------------------------------------------------------
-# ConsensusFeatureSelector — prahová logika (), identická s analyza.py
-# ---------------------------------------------------------------------------
-class ConsensusFeatureSelector(BaseEstimator, TransformerMixin):
-    def __init__(self, chi2_alpha=0.05, min_votes=2, min_selected=3):
-        self.chi2_alpha   = chi2_alpha
-        self.min_votes    = min_votes
-        self.min_selected = min_selected
-
-    def fit(self, X, y):
-        from sklearn.feature_selection import chi2 as _chi2
-        n_features = X.shape[1]
-        rfe_k = max(1, int(math.sqrt(n_features)))
-
-        X_mm = MinMaxScaler().fit_transform(X)
-        _, chi2_pvals = _chi2(X_mm, y)
-        mask_chi2 = chi2_pvals < self.chi2_alpha
-
-        rf = RandomForestClassifier(n_estimators=100, random_state=42,
-                                    n_jobs=1, class_weight='balanced')
-        rf.fit(X, y)
-        mask_rf = rf.feature_importances_ > rf.feature_importances_.mean()
-
-        X_rfe = RobustScaler().fit_transform(X)
-        lr    = LogisticRegression(max_iter=300, random_state=42,
-                                   class_weight='balanced', C=0.1)
-        step  = max(1, n_features // 10)
-        rfe   = RFE(estimator=lr, n_features_to_select=rfe_k, step=step)
-        rfe.fit(X_rfe, y)
-        mask_rfe = rfe.support_
-
-        votes   = mask_chi2.astype(int) + mask_rf.astype(int) + mask_rfe.astype(int)
-        support = votes >= self.min_votes
-        if support.sum() < self.min_selected:
-            support = votes >= 1
-        if support.sum() == 0:
-            top_idx = np.argsort(votes)[::-1][:max(3, n_features // 10)]
-            support = np.zeros(n_features, dtype=bool)
-            support[top_idx] = True
-
-        self.support_    = support
-        self.votes_      = votes
-        self.n_selected_ = int(support.sum())
-        return self
-
-    def transform(self, X):
-        return X[:, self.support_]
-
-    def get_support(self, indices=False):
-        if indices:
-            return np.where(self.support_)[0]
-        return self.support_
-
-
-class P3SelectorConsensus(BaseEstimator, TransformerMixin):
-    def __init__(self, n_p1, min_votes=2):
-        self.n_p1      = n_p1
-        self.min_votes = min_votes
-
-    def fit(self, X, y):
-        self.fs_ = ConsensusFeatureSelector(min_votes=self.min_votes)
-        self.fs_.fit(X[:, self.n_p1:], y)
-        return self
-
-    def transform(self, X):
-        return np.hstack([X[:, :self.n_p1],
-                          self.fs_.transform(X[:, self.n_p1:])])
-
-    def get_support(self):
-        return np.concatenate([np.ones(self.n_p1, dtype=bool),
-                               self.fs_.get_support()])
+from model_components import ConsensusFeatureSelector, P3SelectorConsensus
 
 
 # =============================================================================
@@ -395,27 +319,6 @@ def badge_class(color_key):
     }[color_key]
 
 
-def band_svg(prob: float, thr: float) -> str:
-    """Trojzónový vizuálny indikátor s markerom pacienta a čiarou prahu."""
-    pct = prob * 100
-    thr_pct = thr * 100
-    # marker pozícia v % šírky SVG (width=400)
-    w = 400
-    mx = prob * w
-    tx = thr * w
-    return f"""
-<svg width="100%" viewBox="0 0 {w} 36" xmlns="http://www.w3.org/2000/svg"
-     style="display:block;margin:8px 0;border-radius:8px;overflow:hidden;">
-  <rect x="0"   y="0" width="{int(w*0.35)}" height="20" fill="#c8f0dc"/>
-  <rect x="{int(w*0.35)}" y="0" width="{int(w*0.30)}" height="20" fill="#fde8bc"/>
-  <rect x="{int(w*0.65)}" y="0" width="{int(w*0.35)}" height="20" fill="#f9cece"/>
-  <text x="{int(w*0.175)}" y="14" text-anchor="middle" font-size="9" fill="#1b5e38" font-weight="600">NÍZKE</text>
-  <text x="{int(w*0.50)}"  y="14" text-anchor="middle" font-size="9" fill="#7a4a00" font-weight="600">HRANIČNÉ</text>
-  <text x="{int(w*0.825)}" y="14" text-anchor="middle" font-size="9" fill="#7a1f1f" font-weight="600">ZVÝŠENÉ</text>
-  <line x1="{tx:.1f}" y1="0" x2="{tx:.1f}" y2="20" stroke="#0f5f8c" stroke-width="2" stroke-dasharray="3,2"/>
-  <text x="{tx:.1f}" y="30" text-anchor="middle" font-size="8" fill="#0f5f8c">prah {thr_pct:.0f}%</text>
-  <polygon points="{mx:.1f},2 {mx-6:.1f},18 {mx+6:.1f},18" fill="#132238" opacity="0.85"/>
-</svg>"""
 
 
 def score_card(title, prob, pkg):
@@ -914,7 +817,7 @@ elif step == "3_results":
         # P3 hlavná karta
         st.markdown(f"""
 <div class="clinical-card">
-    <div class="metric-title">Hlavný model — P3 (anamnéza + dotazník, 13 premenných)</div>
+    <div class="metric-title">Hlavný model — P3 — anamnéza + dotazník, 13 premenných</div>
     <div class="metric-big" style="color:{color_p3};">{prob_p3*100:.1f}%</div>
     <div class="progress-track">
         <div class="progress-fill" style="width:{prob_p3*100:.1f}%; background:{color_p3};"></div>
@@ -963,10 +866,11 @@ elif step == "3_results":
     with _exp_l:
         with st.expander("Čo modelové skóre znamená?"):
             st.markdown(
-                "Skóre je odhadovaná **pravdepodobnosť pozitívneho HUTT výsledku** "
-                "v populácii odoslanej na vyšetrenie. "
-                "Na binárnu predikciu sa prevádza cez rozhodovací prah (Youdenov index). "
-                "Porovnáva sa binárna predikcia s binárnym výsledkom HUTT — nie percento priamo.\n\n"
+                "Skóre vyjadruje podiel stromov v modeli, ktoré hlasovali za pozitívny výsledok HUTT testu. "
+                "Model obsahuje 200 rozhodovacích stromov — každý predikuje pozitívny alebo negatívny výsledok. "
+                "Napríklad skóre 70 % znamená, že 140 z 200 stromov hlasovalo za pozitívny výsledok. "
+                "Na porovnanie so skutočným výsledkom HUTT sa skóre prevádza cez rozhodovací prah "
+                "na binárnu predikciu (pozitívna / negatívna).\n\n"
                 "| Skóre | Farba | Interpretácia |\n"
                 "|---|---|---|\n"
                 "| < 40 % | 🟢 zelená | Skôr negatívny výsledok |\n"
