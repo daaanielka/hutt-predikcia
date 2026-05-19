@@ -42,6 +42,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
+from model_components import ConsensusFeatureSelector, P3SelectorConsensus
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
 from sklearn.pipeline import Pipeline
@@ -75,79 +76,6 @@ N_BOOTSTRAP = 1000
 USE_MA_DIAG = False
 
 _val_sheets: dict = {}   # collector — každý df sa uloží tu, na konci → validacia.xlsx
-
-
-# =============================================================
-# KONSENZUS FEATURE SELECTOR  (identický s analyza.py)
-# =============================================================
-
-class ConsensusFeatureSelector(BaseEstimator, TransformerMixin):
-    def __init__(self, chi2_alpha=0.05, min_votes=2, min_selected=3):
-        self.chi2_alpha   = chi2_alpha
-        self.min_votes    = min_votes
-        self.min_selected = min_selected
-
-    def fit(self, X, y):
-        n_features = X.shape[1]
-        rfe_k = max(1, int(math.sqrt(n_features)))
-
-        X_mm = MinMaxScaler().fit_transform(X)
-        _, chi2_pvals = chi2(X_mm, y)
-        mask_chi2 = chi2_pvals < self.chi2_alpha
-
-        rf = RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE,
-                                    n_jobs=1, class_weight='balanced')
-        rf.fit(X, y)
-        mask_rf = rf.feature_importances_ > rf.feature_importances_.mean()
-
-        X_rfe = RobustScaler().fit_transform(X)
-        lr    = LogisticRegression(max_iter=300, random_state=RANDOM_STATE,
-                                   class_weight='balanced', C=0.1)
-        step  = max(1, n_features // 10)
-        rfe   = RFE(estimator=lr, n_features_to_select=rfe_k, step=step)
-        rfe.fit(X_rfe, y)
-        mask_rfe = rfe.support_
-
-        votes   = mask_chi2.astype(int) + mask_rf.astype(int) + mask_rfe.astype(int)
-        support = votes >= self.min_votes
-        if support.sum() < self.min_selected:
-            support = votes >= 1
-        if support.sum() == 0:
-            top_idx = np.argsort(votes)[::-1][:max(3, n_features // 10)]
-            support = np.zeros(n_features, dtype=bool)
-            support[top_idx] = True
-
-        self.support_    = support
-        self.votes_      = votes
-        self.n_selected_ = int(support.sum())
-        return self
-
-    def transform(self, X):
-        return X[:, self.support_]
-
-    def get_support(self, indices=False):
-        if indices:
-            return np.where(self.support_)[0]
-        return self.support_
-
-
-class P3SelectorConsensus(BaseEstimator, TransformerMixin):
-    def __init__(self, n_p1, min_votes=2):
-        self.n_p1      = n_p1
-        self.min_votes = min_votes
-
-    def fit(self, X, y):
-        self.fs_ = ConsensusFeatureSelector(min_votes=self.min_votes)
-        self.fs_.fit(X[:, self.n_p1:], y)
-        return self
-
-    def transform(self, X):
-        return np.hstack([X[:, :self.n_p1],
-                          self.fs_.transform(X[:, self.n_p1:])])
-
-    def get_support(self):
-        return np.concatenate([np.ones(self.n_p1, dtype=bool),
-                               self.fs_.get_support()])
 
 
 def make_pipe(clf, apply_fs=False, scale=False, n_p1=0):
@@ -651,15 +579,11 @@ print("  Ide o odhad z interných dát — klinický prah vyžaduje nezávislé 
 _val_sheets['prah_youden'] = pd.DataFrame(thresh_rows)
 print("Pripravené: sheet 'prah_youden'")
 
-# Aplikačný prah pre každý model:
-#   P1 — fixný 0.5 (orientačný, nie klinicky validovaný)
-#   P3, P4 — Youdenov optimálny prah z OOF predikcií
-MODEL_APP_THR = {}
-for _r in thresh_rows:
-    if 'P1' in _r['Model']:
-        MODEL_APP_THR[_r['Model']] = 0.5
-    else:
-        MODEL_APP_THR[_r['Model']] = _r['Youden_threshold']
+# Aplikačný prah — fixný 0.5 pre všetky modely
+# Youdenov prah (sekcia 4) slúži iba ako interný analytický ukazovateľ,
+# nie ako aplikačný prah. Dôvod: Youden prah je optimalizovaný
+# na tých istých OOF dátach, na ktorých sa hodnotí → optimistický odhad.
+MODEL_APP_THR = {_r['Model']: 0.5 for _r in thresh_rows}
 
 
 # =============================================================
@@ -677,22 +601,39 @@ else:
     # ako pri trénovaní, žiaden rozdiel voči sekcii 4.
     _p3_pkg_path = 'model_p3_et.joblib'
     try:
-        _p3_pkg  = joblib.load(_p3_pkg_path)
-        sel_cols = _p3_pkg['features']
-        _imp_p3  = _p3_pkg['pipeline'].named_steps['imp']
-        et_final = _p3_pkg['pipeline'].named_steps['clf']
-        X_sel    = _imp_p3.transform(df_feat[sel_cols])
-        print(f"  Načítané: {_p3_pkg_path}")
+        _p3_pkg = joblib.load('model_p3_et.joblib')
+        _pipe_p3 = _p3_pkg['pipeline']
+
+        # Vstupné stĺpce = to, čo pipeline očakáva na vstupe
+        _input_cols = _p3_pkg.get('input_features', P3_POOL)
+
+        # Prejdi cez imp + fs krok (bez clf) — presne to čo classifier dostal pri tréningu
+        _imp_step = _pipe_p3.named_steps['imp']
+        X_imp_shap = _imp_step.transform(df_feat[_input_cols])
+
+        if 'fs' in _pipe_p3.named_steps:
+            _fs_step = _pipe_p3.named_steps['fs']
+            X_sel = _fs_step.transform(X_imp_shap)
+            _fs_mask = _fs_step.get_support()
+            sel_cols = [c for c, m in zip(_input_cols, _fs_mask) if m]
+        else:
+            X_sel = X_imp_shap
+            sel_cols = list(_input_cols)
+
+        et_final = _pipe_p3.named_steps['clf']
+        print(f"  Načítané: model_p3_et.joblib")
+
     except FileNotFoundError:
-        print(f"  UPOZORNENIE: {_p3_pkg_path} neexistuje — tréning náhradného modelu...")
-        X_p3   = df_feat[P3_POOL]
-        imp    = SimpleImputer(strategy='median')
-        X_imp  = imp.fit_transform(X_p3)
-        fs     = P3SelectorConsensus(n_p1=N_P1)
+        # fallback — trénuj náhradný model
+        print("  UPOZORNENIE: model_p3_et.joblib neexistuje — tréning náhradného modelu...")
+        X_p3 = df_feat[P3_POOL]
+        imp = SimpleImputer(strategy='median')
+        X_imp = imp.fit_transform(X_p3)
+        fs = P3SelectorConsensus(n_p1=N_P1)
         fs.fit(X_imp, y)
-        mask     = fs.get_support()
+        mask = fs.get_support()
         sel_cols = [c for c, m in zip(P3_POOL, mask) if m]
-        X_sel    = fs.transform(X_imp)
+        X_sel = fs.transform(X_imp)
         et_final = ExtraTreesClassifier(n_estimators=200, random_state=RANDOM_STATE,
                                         n_jobs=1, class_weight='balanced')
         et_final.fit(X_sel, y)
@@ -852,8 +793,8 @@ print("Pripravené: sheet 'permutacny_test'")
 print("\n" + "=" * 65)
 print("8. FAIRNESS ANALÝZA — Pohlavie a Vek")
 print("=" * 65)
-print("  Metriky sa počítajú na OOF predikciách pri aplikačnom prahu každého modelu.")
-print("  P1: fixný prah 0.5  |  P3, P4: Youdenov prah z OOF predikcií.")
+print("  Metriky sa počítajú na OOF predikciách pri fixnom aplikačnom prahu 0.5.")
+print("  Rovnaký prah pre P1, P3 aj P4 — konzistentné porovnanie naprieč modelmi.")
 print("  Pohlavie: F=0, M=1  |  Vek: medián rozdeľuje dve skupiny.")
 print()
 
@@ -892,7 +833,7 @@ fairness_rows = []
 
 for key, oof in oof_probas.items():
     thr      = MODEL_APP_THR[MODEL_LABELS[key]]
-    thr_type = "fixný 0.5" if 'P1' in MODEL_LABELS[key] else "Youden"
+    thr_type = "fixný 0.5"
 
     print(f"  {MODEL_LABELS[key]}  (aplikačný prah={thr:.3f}, {thr_type})")
     print(f"  {'Skupina':<16} {'n':>4}  {'prev%':>6}  {'AUC':>6}  "
@@ -959,17 +900,11 @@ for key, oof in oof_probas.items():
     trow       = next(r for r in thresh_rows if r['Model'] == MODEL_LABELS[key])
     prow       = next(r for r in perm_rows   if r['Model'] == MODEL_LABELS[key])
     app_thr    = MODEL_APP_THR[MODEL_LABELS[key]]
-    # Pre P1 použijeme metriky pri prahu 0.5; pre P3/P4 Youden metriky
-    if 'P1' in MODEL_LABELS[key]:
-        _sens = trow['Sensitivity_05']
-        _spec = trow['Specificity_05']
-        _ppv  = trow['PPV_05']
-        _npv  = trow['NPV_05']
-    else:
-        _sens = trow['Sensitivity_Youden']
-        _spec = trow['Specificity_Youden']
-        _ppv  = trow['PPV']
-        _npv  = trow['NPV']
+
+    _sens = trow['Sensitivity_05']
+    _spec = trow['Specificity_05']
+    _ppv = trow['PPV_05']
+    _npv = trow['NPV_05']
     print(f"{MODEL_LABELS[key]:<25} {auc:>6.4f}  "
           f"[{lo:.4f}–{hi:.4f}]  {brier:>6.4f}  "
           f"{app_thr:>5.3f}  "
@@ -980,7 +915,8 @@ for key, oof in oof_probas.items():
           f"{('<0.001' if prow['p_value'] < 0.001 else str(round(prow['p_value'],3))):>7} {prow['significance']}")
 
 print()
-print("  Pozn.: Prah — P1 fixný 0.5 (orientačný); P3/P4 Youdenov optimálny prah z OOF.")
+print("  Pozn.: Prah — fixný 0.5 pre všetky modely (aplikačný).")
+print("         Youdenov prah (sekcia 4) je analytický ukazovateľ, nie aplikačný prah.")
 print("         Sens/Spec/PPV/NPV zodpovedajú aplikačnému prahu každého modelu.")
 print()
 print("Limitácie:")

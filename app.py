@@ -144,8 +144,8 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-THRESHOLD_P1   = float(pkg_p1["threshold"])
-THRESHOLD_P3   = float(pkg_p3["threshold"])
+THRESHOLD_P1   = 0.5
+THRESHOLD_P3   = 0.5
 P1_FEATURES    = pkg_p1["features"]
 P3_ALL_FEATS   = pkg_p3["features"]        # celý P3_POOL (vstup pipeline)
 P3_DOT_FEATS   = pkg_p3["p2_selected_features"]  # len dotazníkové (FS vybrané)
@@ -817,7 +817,7 @@ elif step == "3_results":
         # P3 hlavná karta
         st.markdown(f"""
 <div class="clinical-card">
-    <div class="metric-title">Hlavný model — P3 — anamnéza + dotazník, 13 premenných</div>
+    <div class="metric-title">Hlavný model — P3 (anamnéza + dotazník, 13 premenných)</div>
     <div class="metric-big" style="color:{color_p3};">{prob_p3*100:.1f}%</div>
     <div class="progress-track">
         <div class="progress-fill" style="width:{prob_p3*100:.1f}%; background:{color_p3};"></div>
@@ -866,9 +866,7 @@ elif step == "3_results":
     with _exp_l:
         with st.expander("Čo modelové skóre znamená?"):
             st.markdown(
-                "Skóre vyjadruje podiel stromov v modeli, ktoré hlasovali za pozitívny výsledok HUTT testu. "
-                "Model obsahuje 200 rozhodovacích stromov — každý predikuje pozitívny alebo negatívny výsledok. "
-                "Napríklad skóre 70 % znamená, že 140 z 200 stromov hlasovalo za pozitívny výsledok. "
+                "Skóre vyjadruje pravdepodobnosť pozitívneho výsledku HUTT testu podľa modelu. "
                 "Na porovnanie so skutočným výsledkom HUTT sa skóre prevádza cez rozhodovací prah "
                 "na binárnu predikciu (pozitívna / negatívna).\n\n"
                 "| Skóre | Farba | Interpretácia |\n"
@@ -892,13 +890,13 @@ elif step == "3_results":
 **P1 (anamnestický model):** Extra Trees · {_n_p1_feats} premenných (pohlavie, vek, TK, pulz)
 · AUC {round(pkg_p1.get('AUC_CV_mean',0)*100,1)}% ± {round(pkg_p1.get('AUC_std',0)*100,1)}%
 · Sens {round(pkg_p1.get('sensitivity_at_thr',0)*100,0):.0f}% / Spec {round(pkg_p1.get('specificity_at_thr',0)*100,0):.0f}%
-· **Prah {THRESHOLD_P1:.2f}** (fixná hodnota, P1 slúži ako predbežná orientácia).
+· **Prah {THRESHOLD_P1:.2f}** (fixný prah pre všetky modely; metriky sú počítané pri 0.5, klinicky orientačné).
 
 **P3 (kombinovaný model):** Extra Trees · {_n_p3_total} premenných
 (5 anamnestických + {_n_p3_dot} dotazníkových, výber ConsensusFS z CV)
 · AUC {round(pkg_p3.get('AUC_CV_mean',0)*100,1)}% ± {round(pkg_p3.get('AUC_std',0)*100,1)}%
 · Sens {round(pkg_p3.get('sensitivity_at_thr',0)*100,0):.0f}% / Spec {round(pkg_p3.get('specificity_at_thr',0)*100,0):.0f}%
-· **Prah {THRESHOLD_P3:.2f}** (Youdenov index: hodnota maximalizujúca Sens + Spec na out-of-fold predikciách 5-fold CV).
+· **Prah {THRESHOLD_P3:.2f}** (fixný prah pre všetky modely; metriky sú počítané pri 0.5, klinicky orientačné).
 
 **Feature selection:** ConsensusFS: premenná je zaradená ak ju vybrali aspoň 2 z 3 metód
 (Chi² p < 0.05, RF importance nad priemerom, RFE top √n). Výsledná sada je stabilizovaná
