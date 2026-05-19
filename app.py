@@ -130,6 +130,7 @@ st.markdown("""
     --primary: #0f5f8c;
     --primary-dark: #09486b;
     --green: #1b8a5a;
+    --yellow: #b8860b;
     --orange: #c97918;
     --red: #b83b3b;
     --shadow: 0 8px 24px rgba(15,35,60,0.08);
@@ -158,6 +159,7 @@ st.markdown("""
 .badge { display: inline-block; padding: 6px 10px; border-radius: 999px;
     font-weight: 700; font-size: 0.86rem; margin-top: 8px; }
 .badge-green  { background: rgba(27,138,90,.12);  color: var(--green); }
+.badge-yellow { background: #fff3cd; color: #7d5a00; border: 1px solid #e6c85a; }
 .badge-orange { background: rgba(201,121,24,.14); color: var(--orange); }
 .badge-red    { background: rgba(184,59,59,.13);  color: var(--red); }
 .progress-track { background: #e8eef5; border-radius: 999px; height: 8px;
@@ -343,7 +345,7 @@ NUMERIC_FEATURES = {"C1", "C2", "C4", "J3"}
 BLOCK_ORDER = [
     ("Vznik a charakter ťažkostí",    ["C1", "C2", "C4"]),
     ("Okolnosti straty vedomia",       ["D1", "D2", "D3", "D4", "D5", "D6"]),
-    ("Spúšťacie faktory",             ["E1", "E2", "E3", "E4", "E5", "E6",
+    ("Spúšťacie faktory straty vedomia", ["E1", "E2", "E3", "E4", "E5", "E6",
                                         "E7", "E8", "E9", "F1", "F2", "F3",
                                         "F4", "F5", "F6", "F7", "F10"]),
     ("Príznaky pred stratou vedomia", ["H1", "H2", "H3", "H4", "H5", "H6",
@@ -366,21 +368,54 @@ BLOCK_ORDER = [
 # HELPERS
 # =============================================================================
 def band(prob: float):
-    """Pásmo na základe pravdepodobnosti — nezávislé od konkrétneho prahu."""
-    if prob >= 0.65:
-        return "zvýšené", "red",    "Zvýšené modelové skóre"
-    if prob >= 0.35:
-        return "hraničné", "orange", "Hraničné modelové skóre"
-    return "nízke", "green", "Nízke modelové skóre"
+    if prob >= 0.75:
+        return "vysoké", "red",    "Výraznejšia pravdepodobnosť pozitívneho výsledku"
+    if prob >= 0.60:
+        return "zvýšené", "orange", "Zvýšená pravdepodobnosť pozitívneho výsledku"
+    if prob >= 0.40:
+        return "hraničné", "yellow", "Hraničná / neistá zóna"
+    return "nízke", "green", "Skôr negatívny výsledok"
 
 
 def band_color(color_key):
-    return {"green": "#1b8a5a", "orange": "#c97918", "red": "#b83b3b"}[color_key]
+    return {
+        "green":  "#1b8a5a",
+        "yellow": "#b8860b",
+        "orange": "#c97918",
+        "red":    "#b83b3b",
+    }[color_key]
 
 
 def badge_class(color_key):
-    return {"green": "badge-green", "orange": "badge-orange",
-            "red": "badge-red"}[color_key]
+    return {
+        "green":  "badge-green",
+        "yellow": "badge-yellow",
+        "orange": "badge-orange",
+        "red":    "badge-red",
+    }[color_key]
+
+
+def band_svg(prob: float, thr: float) -> str:
+    """Trojzónový vizuálny indikátor s markerom pacienta a čiarou prahu."""
+    pct = prob * 100
+    thr_pct = thr * 100
+    # marker pozícia v % šírky SVG (width=400)
+    w = 400
+    mx = prob * w
+    tx = thr * w
+    return f"""
+<svg width="100%" viewBox="0 0 {w} 36" xmlns="http://www.w3.org/2000/svg"
+     style="display:block;margin:8px 0;border-radius:8px;overflow:hidden;">
+  <rect x="0"   y="0" width="{int(w*0.35)}" height="20" fill="#c8f0dc"/>
+  <rect x="{int(w*0.35)}" y="0" width="{int(w*0.30)}" height="20" fill="#fde8bc"/>
+  <rect x="{int(w*0.65)}" y="0" width="{int(w*0.35)}" height="20" fill="#f9cece"/>
+  <text x="{int(w*0.175)}" y="14" text-anchor="middle" font-size="9" fill="#1b5e38" font-weight="600">NÍZKE</text>
+  <text x="{int(w*0.50)}"  y="14" text-anchor="middle" font-size="9" fill="#7a4a00" font-weight="600">HRANIČNÉ</text>
+  <text x="{int(w*0.825)}" y="14" text-anchor="middle" font-size="9" fill="#7a1f1f" font-weight="600">ZVÝŠENÉ</text>
+  <line x1="{tx:.1f}" y1="0" x2="{tx:.1f}" y2="20" stroke="#0f5f8c" stroke-width="2" stroke-dasharray="3,2"/>
+  <text x="{tx:.1f}" y="30" text-anchor="middle" font-size="8" fill="#0f5f8c">prah {thr_pct:.0f}%</text>
+  <polygon points="{mx:.1f},2 {mx-6:.1f},18 {mx+6:.1f},18" fill="#132238" opacity="0.85"/>
+</svg>"""
 
 
 def score_card(title, prob, pkg):
@@ -425,22 +460,27 @@ def score_card(title, prob, pkg):
 
 
 def clinical_interpretation(prob: float) -> str:
-    """Interpretácia na základe pravdepodobnosti — bez tvrdého prahu."""
-    if prob >= 0.65:
+    if prob >= 0.75:
         return (
-            "Modelové skóre je v pásme zvýšeného odhadu rizika pozitívneho výsledku "
+            "Modelové skóre je v pásme výraznejšej pravdepodobnosti pozitívneho výsledku "
             "HUTT testu. Výsledok je určený na posúdenie v kontexte klinického obrazu "
             "pacienta — nie je náhradou odborného vyšetrenia."
         )
-    if prob >= 0.35:
+    if prob >= 0.60:
         return (
-            "Modelové skóre je v hraničnom pásme. Ide o oblasť neistoty, kde malá zmena "
-            "vstupných údajov môže zmeniť zaradenie. Výsledok má obmedzenú výpovednú "
-            "hodnotu a mal by byť posudzovaný spolu s ďalšími klinickými informáciami."
+            "Modelové skóre naznačuje zvýšenú pravdepodobnosť pozitívneho výsledku "
+            "HUTT testu. Výsledok je určený na posúdenie v kontexte klinického obrazu "
+            "pacienta — nie je náhradou odborného vyšetrenia."
+        )
+    if prob >= 0.40:
+        return (
+            "Modelové skóre je v hraničnom pásme neistoty. Malá zmena vstupných údajov "
+            "môže zmeniť zaradenie. Výsledok má obmedzenú výpovednú hodnotu a mal by byť "
+            "posudzovaný spolu s ďalšími klinickými informáciami."
         )
     return (
-        "Modelové skóre je v pásme nízkeho odhadu rizika pozitívneho výsledku "
-        "HUTT testu. Nízke modelové skóre nevylučuje klinicky významnú príčinu synkopy."
+        "Modelové skóre naznačuje skôr negatívny výsledok HUTT testu. "
+        "Nízke modelové skóre nevylučuje klinicky významnú príčinu synkopy."
     )
 
 
@@ -547,6 +587,17 @@ with st.sidebar:
             f"</span></div>",
             unsafe_allow_html=True,
         )
+    st.divider()
+
+    st.markdown("**Farebné zóny skóre**")
+    st.markdown("""
+<div style="font-size:0.82rem; line-height:1.7;">
+<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#1b8a5a;margin-right:6px;vertical-align:middle;"></span><b style="color:#1b8a5a;">< 40 %</b> — skôr negatívny<br>
+<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#b8860b;margin-right:6px;vertical-align:middle;"></span><b style="color:#b8860b;">40 – 60 %</b> — hraničná zóna<br>
+<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#c97918;margin-right:6px;vertical-align:middle;"></span><b style="color:#c97918;">60 – 75 %</b> — zvýšená pravdepodobnosť<br>
+<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#b83b3b;margin-right:6px;vertical-align:middle;"></span><b style="color:#b83b3b;">≥ 75 %</b> — výraznejšia pravdepodobnosť
+</div>
+""", unsafe_allow_html=True)
     st.divider()
 
     st.markdown(
@@ -728,15 +779,13 @@ Potom je možné doplniť dotazníkové premenné a získať kombinované skóre
 modelu <b>P3 Extra Trees</b> (anamnéza + dotazník, AUC ≈ 81 %).
 </div>
 <div class="notice">
-<b>Pre koho je aplikácia určená:</b> Výhradne pre pacientov odoslaných na HUTT vyšetrenie
-po príhode so stratou vedomia. Skóre odráža riziko v kontexte tejto predselektovanej skupiny
-— nie je vhodné pre skríning v bežnej populácii. V trénovacej vzorke malo
-<b>{n_pos}&#160;z&#160;{n_train} pacientov ({prev:.0f}&#160;%) pozitívny výsledok HUTT</b>.
+<b>Pre koho je aplikácia určená:</b><br>
+Pre pacientov odoslaných na HUTT vyšetrenie s niektorou z týchto indikácií:<br>
+strata vedomia · pocit hroziacej straty vedomia · opakované pády · stav po epileptickom záchvate · stav po resuscitácii.<br>
+Skóre odráža riziko v kontexte tejto predselektovanej skupiny.<br>
+Pacienti po resuscitácii (n=2) a po epileptickom záchvate (n=8) sú v tréningových dátach zastúpení minimálne, predikcie pre nich interpretujte s mimoriadnou opatrnosťou.
 </div>
-<div class="warning-box">
-<b>Dôležité:</b> Výstup nie je klinicky validovaná pravdepodobnosť. Ide o modelové skóre
-odvodené z retrospektívnych dát jedného centra.
-</div>
+
 """.format(
                 n_train=pkg_p3.get("n_train", "?"),
                 n_pos=pkg_p3.get("n_pos", "?"),
@@ -760,9 +809,10 @@ elif step == "2_questionnaire":
     )
     st.markdown("""
 <div class="notice">
-<b>Návod:</b> Ak symptóm nebol prítomný, zvoľte <b>Nie</b>.
-Ak informácia nie je k dispozícii, zvoľte <b>Neznáme</b>.
-Nevyplnené premenné budú nahradené mediánom trénovacej vzorky.
+<b>Dôležitý kontext:</b> Niektoré otázky sa týkajú <b>priebehu synkopálnej alebo presynkopálnej príhody</b>
+(príznaky pred stratou vedomia, okolnosti, stav po prebudení).
+Vypĺňajte ich len ak pacient takúto príhodu prekonal a okolnosti sú známe.
+Ak informácia nie je dostupná, ponechajte pole na <b>Neznáme</b>.
 </div>
 """, unsafe_allow_html=True)
 
@@ -844,155 +894,87 @@ elif step == "3_results":
 
     st.markdown("### 3. Modelový odhad výsledku HUTT testu")
 
-    # --- HLAVNÁ KARTA P3 ---
+    # --- premenné ---
     label_p3, color_key_p3, headline_p3 = band(prob_p3)
     color_p3  = band_color(color_key_p3)
     thr_p3    = float(pkg_p3.get("threshold", 0.5))
+    thr_p1    = float(pkg_p1.get("threshold", 0.5))
     auc_p3    = pkg_p3.get("AUC_CV_mean")
     above_thr = prob_p3 >= thr_p3
-    thr_text  = (f"Skóre je <b>nad</b> interným validačným prahom ({thr_p3:.2f})"
-                 if above_thr else
-                 f"Skóre je <b>pod</b> interným validačným prahom ({thr_p3:.2f})")
+    thr_text  = ("nad" if above_thr else "pod")
+    label_p1, color_key_p1, _ = band(prob_p1)
+    color_p1  = band_color(color_key_p1)
+    delta     = prob_p3 - prob_p1
+    pred_p1_bin = "pozitívna" if prob_p1 >= thr_p1 else "negatívna"
+    pred_p3_bin = "pozitívna" if prob_p3 >= thr_p3 else "negatívna"
 
-    st.markdown(f"""
+    col_main, col_side = st.columns([1.35, 1.0], gap="large")
+
+    with col_main:
+        # P3 hlavná karta
+        st.markdown(f"""
 <div class="clinical-card">
-    <div class="metric-title">Hlavný model aplikácie — P3 (kombinácia anamnézy a dotazníka)</div>
+    <div class="metric-title">Hlavný model — P3 (anamnéza + dotazník, 13 premenných)</div>
     <div class="metric-big" style="color:{color_p3};">{prob_p3*100:.1f}%</div>
     <div class="progress-track">
         <div class="progress-fill" style="width:{prob_p3*100:.1f}%; background:{color_p3};"></div>
     </div>
     <span class="badge {badge_class(color_key_p3)}">{headline_p3}</span>
     <div class="metric-sub" style="margin-top:10px;">
-        {thr_text} &nbsp;·&nbsp; Interná validácia: AUC {round(auc_p3*100,1) if auc_p3 else '–'}%
+        Skóre je <b>{thr_text}</b> interným prahom {thr_p3:.2f} &nbsp;·&nbsp;
+        AUC {round(auc_p3*100,1) if auc_p3 else '–'}%
     </div>
-    <div style="margin-top:10px; font-size:0.93rem; color:#1a3a5a;">
+    <div style="margin-top:8px; font-size:0.90rem; color:#1a3a5a;">
         {clinical_interpretation(prob_p3)}
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-    # --- METRIKY P3 V EXPANDÉRI ---
-    with st.expander("Zobraziť validačné metriky modelu P3"):
-        sens_p3 = pkg_p3.get("sensitivity_at_thr")
-        spec_p3 = pkg_p3.get("specificity_at_thr")
-        ppv_p3  = pkg_p3.get("ppv_at_thr")
-        npv_p3  = pkg_p3.get("npv_at_thr")
-        std_p3  = pkg_p3.get("AUC_std")
-        _n_p3   = len(pkg_p3.get("selected_features", []))
+
+    with col_side:
+        # P1 karta
         st.markdown(f"""
-| Metrika | Hodnota |
-|---|---|
-| AUC (5-fold CV) | {round(auc_p3*100,1) if auc_p3 else '–'}% ± {round(std_p3*100,1) if std_p3 else '–'}% |
-| Senzitivita | {round(sens_p3*100,0):.0f}% |
-| Specificita | {round(spec_p3*100,0):.0f}% |
-| PPV | {round(ppv_p3*100,0):.0f}% |
-| NPV | {round(npv_p3*100,0):.0f}% |
-| Prah (Youdenov index) | {thr_p3:.2f} |
-| Počet premenných | {_n_p3} |
-
-*Metriky sú vypočítané na out-of-fold predikciách internej 5-fold CV.*
-""")
-
-    # --- DOPLNKOVÁ KARTA P1 ---
-    label_p1, color_key_p1, _ = band(prob_p1)
-    color_p1 = band_color(color_key_p1)
-    delta     = prob_p3 - prob_p1
-    st.markdown(f"""
-<div class="soft-card" style="margin-top:12px;">
-    <div class="metric-title">Predbežný model P1 — iba základné údaje (pohlavie, vek, TK, pulz)</div>
-    <div style="display:flex; align-items:center; gap:18px; margin-top:8px;">
-        <div style="font-size:2.0rem; font-weight:800; color:{color_p1};">{prob_p1*100:.1f}%</div>
-        <div>
-            <span class="badge {badge_class(color_key_p1)}" style="font-size:0.78rem;">{label_p1}</span><br>
-            <span class="small-muted">Rozdiel oproti P3: <b>{delta*100:+.1f} p. b.</b>
-            ({prob_p1*100:.1f}% → {prob_p3*100:.1f}%)</span>
-        </div>
+<div class="soft-card">
+    <div class="metric-title">Predbežný model P1 — 5 základných údajov</div>
+    <div style="font-size:2.0rem; font-weight:800; color:{color_p1}; margin-top:6px;">{prob_p1*100:.1f}%</div>
+    <div class="progress-track">
+        <div class="progress-fill" style="width:{prob_p1*100:.1f}%; background:{color_p1};"></div>
     </div>
+    <span class="badge {badge_class(color_key_p1)}" style="font-size:0.78rem;">{label_p1}</span>
+    <div class="small-muted" style="margin-top:6px;">Posun oproti P3: <b>{delta*100:+.1f} p. b.</b></div>
 </div>
 """, unsafe_allow_html=True)
 
-    # --- ZHODA / NESÚLAD ---
-    if label_p1 == label_p3:
-        st.success(
-            f"Oba modely sa zhodujú: skóre je v pásme **{label_p3}**. "
-            "Zhoda modelov zvyšuje konzistentnosť výstupu — nie však istotu klinickej diagnózy."
-        )
-    else:
-        st.warning(
-            f"Modely sa líšia: predbežný model P1 naznačuje pásmo **{label_p1}**, "
-            f"ale hlavný kombinovaný model P3 vyhodnotil skóre ako **{label_p3}**. "
-            "Výsledok interpretujte opatrne a v kontexte klinického obrazu."
-        )
+        # zhoda / nesúlad
+        if pred_p1_bin == pred_p3_bin:
+            st.success(
+                f"Oba modely predikujú **{pred_p3_bin}** predikciu. "
+                "Zhoda zvyšuje konzistentnosť výstupu."
+            )
+        else:
+            st.warning(
+                f"Modely sa líšia: P1 → **{pred_p1_bin}**, P3 → **{pred_p3_bin}**. "
+                "Rozhodujúci je P3. Interpretujte v klinickom kontexte."
+            )
 
-    def _draw_hist(ax, pkg, prob_patient, title):
-        _pos  = pkg.get("train_proba_pos", [])
-        _neg  = pkg.get("train_proba_neg", [])
-        if not _pos or not _neg:
-            return False
-        _bins = np.linspace(0, 1, 21)
-        ax.hist(_neg, bins=_bins, alpha=0.65, color="#1b8a5a",
-                label=f"HUTT− (n={len(_neg)})", density=True,
-                edgecolor="white", linewidth=0.5)
-        ax.hist(_pos, bins=_bins, alpha=0.65, color="#b83b3b",
-                label=f"HUTT+ (n={len(_pos)})", density=True,
-                edgecolor="white", linewidth=0.5)
-        ax.axvline(prob_patient, color="#c97918", linewidth=2,
-                   linestyle="--", label=f"Pacient ({round(prob_patient*100,1)}%)")
-        ax.axvline(pkg["threshold"], color="#0f5f8c", linewidth=1.5,
-                   linestyle=":", label=f"Prah ({int(pkg['threshold']*100)}%)")
-        ax.set_title(title, fontsize=9, fontweight="bold", pad=4)
-        ax.set_xlabel("Modelové skóre", fontsize=8)
-        ax.set_ylabel("Hustota", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7, loc="upper center", framealpha=0.85)
-        ax.set_xlim(0, 1)
-        ax.spines[["top", "right"]].set_visible(False)
-        return True
 
-    with st.expander("📊 Distribúcia modelového skóre", expanded=False):
-        st.caption("Poloha pacienta voči HUTT− a HUTT+ pacientom z trénovacej vzorky")
-        _sp1, _gc1, _gc2, _sp2 = st.columns([0.3, 2, 2, 0.3])
-        with _gc1:
-            _fig1, _ax1 = plt.subplots(figsize=(3.6, 2.6), dpi=110)
-            if _draw_hist(_ax1, pkg_p1, prob_p1, "P1 — Extra Trees (anamnéza)"):
-                _fig1.tight_layout()
-                st.pyplot(_fig1, use_container_width=False)
-            else:
-                st.info("Distribučné dáta nie sú dostupné.")
-            plt.close(_fig1)
-        with _gc2:
-            _fig2, _ax2 = plt.subplots(figsize=(3.6, 2.6), dpi=110)
-            if _draw_hist(_ax2, pkg_p3, prob_p3, "P3 — Extra Trees (kombinácia)"):
-                _fig2.tight_layout()
-                st.pyplot(_fig2, use_container_width=False)
-            else:
-                st.info("Distribučné dáta nie sú dostupné.")
-            plt.close(_fig2)
 
-    with st.expander("Zobraziť zadané údaje pacienta"):
-        ana = st.session_state.get("case_ana_values", {})
-        ana_df = pd.DataFrame([
-            {"Premenná": "Pohlavie",
-             "Hodnota": "Muž" if ana.get("Pohlavie_enc") == 1 else "Žena"},
-            {"Premenná": "Vek",            "Hodnota": ana.get("Vek")},
-            {"Premenná": "TK systolický",  "Hodnota": ana.get("TK_sys")},
-            {"Premenná": "TK diastolický", "Hodnota": ana.get("TK_dia")},
-            {"Premenná": "Pulz",           "Hodnota": ana.get("Pulz")},
-        ])
-        st.dataframe(ana_df, use_container_width=True, hide_index=True)
-
-        dot_values = st.session_state.get("case_dot_values", {})
-        dot_df = []
-        for k, v in dot_values.items():
-            val = ("Neznáme" if pd.isna(v) else
-                   (int(v) if k in NUMERIC_FEATURES
-                    else ("Áno" if v == 1 else "Nie")))
-            dot_df.append({"Kód": k,
-                           "Premenná": FEATURE_LABELS.get(k, k),
-                           "Hodnota": val})
-        if dot_df:
-            st.dataframe(pd.DataFrame(dot_df), use_container_width=True,
-                         hide_index=True)
+    _exp_l, _exp_r = st.columns([1.35, 1.0], gap="large")
+    with _exp_l:
+        with st.expander("Čo modelové skóre znamená?"):
+            st.markdown(
+                "Skóre je odhadovaná **pravdepodobnosť pozitívneho HUTT výsledku** "
+                "v populácii odoslanej na vyšetrenie. "
+                "Na binárnu predikciu sa prevádza cez rozhodovací prah (Youdenov index). "
+                "Porovnáva sa binárna predikcia s binárnym výsledkom HUTT — nie percento priamo.\n\n"
+                "| Skóre | Farba | Interpretácia |\n"
+                "|---|---|---|\n"
+                "| < 40 % | 🟢 zelená | Skôr negatívny výsledok |\n"
+                "| 40 – 60 % | 🟡 žltá | Hraničná / neistá zóna |\n"
+                "| 60 – 75 % | 🟠 oranžová | Zvýšená pravdepodobnosť pozitívneho výsledku |\n"
+                "| ≥ 75 % | 🔴 červená | Výraznejšia pravdepodobnosť pozitívneho výsledku |\n\n"
+                "*Skóre odráža riziko v kontexte pacientov odoslaných na HUTT.*"
+            )
 
     with st.expander("Model Card"):
         _n_p1_feats  = len(pkg_p1.get('selected_features', []))
@@ -1000,36 +982,35 @@ elif step == "3_results":
         _n_p3_dot    = len(P3_DOT_FEATS)
         st.markdown(f"""
 **Účel:** Orientačný odhad modelového skóre pre pozitívny HUTT test (A10=1).
-Určené pre pacientov odoslaných na HUTT vyšetrenie — nie pre skríning v bežnej populácii.
 
 **Cieľová premenná:** A10 (0 = HUTT negatívny, 1 = HUTT pozitívny).
 
-**P1 — anamnestický model:** Extra Trees · {_n_p1_feats} premenných (pohlavie, vek, TK, pulz)
+**P1 (anamnestický model):** Extra Trees · {_n_p1_feats} premenných (pohlavie, vek, TK, pulz)
 · AUC {round(pkg_p1.get('AUC_CV_mean',0)*100,1)}% ± {round(pkg_p1.get('AUC_std',0)*100,1)}%
 · Sens {round(pkg_p1.get('sensitivity_at_thr',0)*100,0):.0f}% / Spec {round(pkg_p1.get('specificity_at_thr',0)*100,0):.0f}%
-· **Prah {THRESHOLD_P1:.2f}** — fixná hodnota (P1 slúži ako predbežná orientácia).
+· **Prah {THRESHOLD_P1:.2f}** (fixná hodnota, P1 slúži ako predbežná orientácia).
 
-**P3 — kombinovaný model:** Extra Trees · {_n_p3_total} premenných
+**P3 (kombinovaný model):** Extra Trees · {_n_p3_total} premenných
 (5 anamnestických + {_n_p3_dot} dotazníkových, výber ConsensusFS z CV)
 · AUC {round(pkg_p3.get('AUC_CV_mean',0)*100,1)}% ± {round(pkg_p3.get('AUC_std',0)*100,1)}%
 · Sens {round(pkg_p3.get('sensitivity_at_thr',0)*100,0):.0f}% / Spec {round(pkg_p3.get('specificity_at_thr',0)*100,0):.0f}%
-· **Prah {THRESHOLD_P3:.2f}** — určený Youdenovým indexom: hodnota maximalizujúca
-  Sens + Spec − 1 na out-of-fold predikciách 5-fold CV.
+· **Prah {THRESHOLD_P3:.2f}** (Youdenov index: hodnota maximalizujúca Sens + Spec na out-of-fold predikciách 5-fold CV).
 
-**Feature selection:** ConsensusFS — premenná je zaradená ak ju vybrali ≥ 2 z 3 metód
-(Chi² p < 0.05, RF importance > priemer, RFE top √n). Výsledná sada je stabilizovaná
-konsenzusom ≥ 3 z 5 CV foldov.
+**Feature selection:** ConsensusFS: premenná je zaradená ak ju vybrali aspoň 2 z 3 metód
+(Chi² p < 0.05, RF importance nad priemerom, RFE top √n). Výsledná sada je stabilizovaná
+konsenzusom aspoň 3 z 5 CV foldov.
 
-**Validácia:** interná — 5-fold stratifikovaná CV. Externá validácia nebola vykonaná.
+**Validácia:** interná 5-fold stratifikovaná CV. Externá validácia nebola vykonaná.
 
 **Trénovacia vzorka:** n = {pkg_p3.get('n_train','?')} pacientov ({pkg_p3.get('n_pos','?')} HUTT+,
 prevalencia {round(pkg_p3.get('n_pos',0)/pkg_p3.get('n_train',1)*100) if pkg_p3.get('n_train') else '?'}%).
 
-**Interpretácia skóre:** < 35% = nízke pásmo · 35–65% = hraničné · > 65% = zvýšené.
-Tieto pásma sú orientačné — klinické rozhodnutie patrí lekárovi.
+**Interpretácia skóre:** < 40% = skôr negatívny · 40–60% = hraničná/neistá zóna · 60–75% = zvýšená pravdepodobnosť · ≥ 75% = výraznejšia pravdepodobnosť.
+Tieto pásma sú orientačné, klinické rozhodnutie patrí lekárovi.
 
 **Limitácie:** retrospektívne dáta, jednocentrický pôvod, bez externej validácie,
 class_weight=balanced (model kalibrovaný pre rovnomernú váhu tried).
+Model bol trénovaný prevažne na pacientoch so synkopou a presynkopou. Podskupiny po resuscitácii (n=2) a po epileptickom záchvate (n=8) sú v dátach zastúpené minimálne, preto predikcie pre týchto pacientov treba interpretovať s mimoriadnou opatrnosťou, model pre ne nemá dostatočnú oporu v tréningových dátach.
 """)
 
     st.markdown("""
