@@ -845,6 +845,7 @@ elif step == "3_results":
     </div>
     <span class="badge {badge_class(color_key_p1)}" style="font-size:0.78rem;">{label_p1}</span>
     <div class="small-muted" style="margin-top:6px;">Posun oproti P3: <b>{delta*100:+.1f} p. b.</b></div>
+    <div style="margin-top:8px; font-size:0.82rem; color:#607080;">Percento vyjadruje modelom odhadnutú pravdepodobnosť pozitívneho výsledku HUTT testu.</div>
 </div>
 """, unsafe_allow_html=True)
 
