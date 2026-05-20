@@ -866,9 +866,9 @@ elif step == "3_results":
     with _exp_l:
         with st.expander("Čo modelové skóre znamená?"):
             st.markdown(
-                "Skóre vyjadruje pravdepodobnosť pozitívneho výsledku HUTT testu podľa modelu. "
-                "Na porovnanie so skutočným výsledkom HUTT sa skóre prevádza cez rozhodovací prah "
-                "na binárnu predikciu (pozitívna / negatívna).\n\n"
+                "Percento znamená modelom odhadnutú pravdepodobnosť pozitívneho výsledku HUTT testu, "
+                "pri hodnote 50 % a viac model klasifikuje prípad ako skôr pozitívny, pri nižšej hodnote "
+                "ako skôr negatívny. Farebné pásma sú vizuálna pomôcka.\n\n"
                 "| Skóre | Farba | Interpretácia |\n"
                 "|---|---|---|\n"
                 "| < 40 % | 🟢 zelená | Skôr negatívny výsledok |\n"
