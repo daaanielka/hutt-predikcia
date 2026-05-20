@@ -661,6 +661,7 @@ if step == "1_anamnesis":
                 prob=st.session_state["case_prob_p1"],
                 pkg=pkg_p1,
             )
+            st.caption("Percento znamená modelom odhadnutú pravdepodobnosť pozitívneho výsledku HUTT testu, pri hodnote 50 % a viac model klasifikuje prípad ako skôr pozitívny, pri nižšej hodnote ako skôr negatívny. Farebné pásma sú vizuálna pomôcka.")
             st.markdown(
                 f"<div class='notice'>"
                 f"{clinical_interpretation(st.session_state['case_prob_p1'])}"
@@ -832,6 +833,7 @@ elif step == "3_results":
     </div>
 </div>
 """, unsafe_allow_html=True)
+        st.caption("Percento znamená modelom odhadnutú pravdepodobnosť pozitívneho výsledku HUTT testu, pri hodnote 50 % a viac model klasifikuje prípad ako skôr pozitívny, pri nižšej hodnote ako skôr negatívny. Farebné pásma sú vizuálna pomôcka.")
 
 
     with col_side:
