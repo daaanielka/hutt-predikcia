@@ -362,28 +362,13 @@ def score_card(title, prob, pkg):
 """, unsafe_allow_html=True)
 
 
+
+
 def clinical_interpretation(prob: float) -> str:
-    if prob >= 0.75:
-        return (
-            "Modelové skóre je v pásme výraznejšej pravdepodobnosti pozitívneho výsledku "
-            "HUTT testu. Výsledok je určený na posúdenie v kontexte klinického obrazu "
-            "pacienta — nie je náhradou odborného vyšetrenia."
-        )
-    if prob >= 0.60:
-        return (
-            "Modelové skóre naznačuje zvýšenú pravdepodobnosť pozitívneho výsledku "
-            "HUTT testu. Výsledok je určený na posúdenie v kontexte klinického obrazu "
-            "pacienta — nie je náhradou odborného vyšetrenia."
-        )
-    if prob >= 0.40:
-        return (
-            "Modelové skóre je v hraničnom pásme neistoty. Malá zmena vstupných údajov "
-            "môže zmeniť zaradenie. Výsledok má obmedzenú výpovednú hodnotu a mal by byť "
-            "posudzovaný spolu s ďalšími klinickými informáciami."
-        )
     return (
-        "Modelové skóre naznačuje skôr negatívny výsledok HUTT testu. "
-        "Nízke modelové skóre nevylučuje klinicky významnú príčinu synkopy."
+        "Percento znamená modelom odhadnutú pravdepodobnosť pozitívneho výsledku HUTT testu, "
+        "pri hodnote 50 % a viac model klasifikuje prípad ako skôr pozitívny, pri nižšej hodnote "
+        "ako skôr negatívny. Farebné pásma sú vizuálna pomôcka."
     )
 
 
@@ -864,22 +849,6 @@ elif step == "3_results":
             )
 
 
-
-    _exp_l, _exp_r = st.columns([1.35, 1.0], gap="large")
-    with _exp_l:
-        with st.expander("Čo modelové skóre znamená?"):
-            st.markdown(
-                "Percento znamená modelom odhadnutú pravdepodobnosť pozitívneho výsledku HUTT testu, "
-                "pri hodnote 50 % a viac model klasifikuje prípad ako skôr pozitívny, pri nižšej hodnote "
-                "ako skôr negatívny. Farebné pásma sú vizuálna pomôcka.\n\n"
-                "| Skóre | Farba | Interpretácia |\n"
-                "|---|---|---|\n"
-                "| < 40 % | 🟢 zelená | Skôr negatívny výsledok |\n"
-                "| 40 – 60 % | 🟡 žltá | Hraničná / neistá zóna |\n"
-                "| 60 – 75 % | 🟠 oranžová | Zvýšená pravdepodobnosť pozitívneho výsledku |\n"
-                "| ≥ 75 % | 🔴 červená | Výraznejšia pravdepodobnosť pozitívneho výsledku |\n\n"
-                "*Skóre odráža riziko v kontexte pacientov odoslaných na HUTT.*"
-            )
 
     with st.expander("Model Card"):
         _n_p1_feats  = len(pkg_p1.get('selected_features', []))
