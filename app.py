@@ -509,8 +509,8 @@ st.markdown("""
     <h1>Predikcia výsledku HUTT testu</h1>
     <p>
     Výskumný model predikcie pozitívneho výsledku Head-Up Tilt Table Testu
-    pri krátkodobej strate vedomia. Porovnanie modelu P1 (anamnéza, 5 premenných)
-    a P3 (kombinácia anamnézy a dotazníka). Výstup predstavuje výskumný odhad
+    pri krátkodobej strate vedomia. Porovnanie modelu P1 (5 premenných)
+    a P3 (13 premenných). Výstup predstavuje výskumný odhad
     a nie je náhradou klinického posúdenia.
     </p>
 </div>
