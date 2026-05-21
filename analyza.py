@@ -883,7 +883,7 @@ def _youden_thr(y_true, oof):
 _APP_MODELS = [
     # (pname,            mname,          pool,     apply_fs, n_p1,  fixed_thr, fname)
     ('P1_anamneza',   'Extra Trees', P1_COLS,  False, 0,    0.500, 'model_p1_et.joblib'),
-    ('P3_kombinacia', 'Extra Trees', P3_POOL,  True,  N_P1, None,  'model_p3_et.joblib'),
+    ('P3_kombinacia', 'Extra Trees', P3_POOL,  True,  N_P1, 0.500, 'model_p3_et.joblib'),
 ]
 
 _saved_pkgs = {}   # uložíme pkg-y pre terminálový dotazník
