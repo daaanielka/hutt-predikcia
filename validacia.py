@@ -605,7 +605,7 @@ else:
         _pipe_p3 = _p3_pkg['pipeline']
 
         # Vstupné stĺpce = to, čo pipeline očakáva na vstupe
-        _input_cols = _p3_pkg.get('input_features', P3_POOL)
+        _input_cols = _p3_pkg.get('input_features', _p3_pkg.get('features', P3_POOL))
 
         # Prejdi cez imp + fs krok (bez clf) — presne to čo classifier dostal pri tréningu
         _imp_step = _pipe_p3.named_steps['imp']
