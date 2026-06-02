@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 app.py — HUTT Decision Support
 Streamlit aplikácia pre predikciu výsledku HUTT testu.
@@ -325,22 +325,7 @@ def score_card(title, prob, pkg):
     label, color_key, headline = band(prob)
     color  = band_color(color_key)
     pct    = round(prob * 100, 1)
-    thr    = float(pkg.get("threshold", 0.5))
-    auc    = pkg.get("AUC_CV_mean")
-    std    = pkg.get("AUC_std")
-    sens   = pkg.get("sensitivity_at_thr")
-    spec   = pkg.get("specificity_at_thr")
-    ppv    = pkg.get("ppv_at_thr")
-    npv    = pkg.get("npv_at_thr")
     n_sel  = len(pkg.get("selected_features", pkg.get("features", [])))
-
-    auc_str  = f"AUC {round(auc*100,1)}%" if auc else "AUC –"
-    std_str  = f" ±{round(std*100,1)}%" if std else ""
-    sens_str = (f"Sens {round(sens*100,0):.0f}% &nbsp;·&nbsp; "
-                f"Spec {round(spec*100,0):.0f}% &nbsp;·&nbsp; "
-                f"PPV {round(ppv*100,0):.0f}% &nbsp;·&nbsp; "
-                f"NPV {round(npv*100,0):.0f}%"
-                if sens and spec and ppv and npv else "")
 
     st.markdown(f"""
 <div class="clinical-card">
@@ -352,14 +337,11 @@ def score_card(title, prob, pkg):
     <span class="badge {badge_class(color_key)}">{headline}</span>
     <div class="metric-sub" style="margin-top:10px;">
         Model: <b>{pkg.get('model_name','?')}</b> &nbsp;·&nbsp;
-        Premenné: <b>{n_sel}</b> &nbsp;·&nbsp;
-        {auc_str}{std_str}
-    </div>
-    <div class="sens-spec-row">
-        Pri prahu <b>{thr:.2f}</b>: &nbsp; {sens_str}
+        Premenné: <b>{n_sel}</b>
     </div>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
@@ -459,20 +441,10 @@ with st.sidebar:
         (pkg_p3, f"P3 — kombinácia (ET, "
                  f"{len(pkg_p3.get('selected_features', []))} premenných)"),
     ]:
-        _auc = _pkg.get("AUC_CV_mean")
-        _std = _pkg.get("AUC_std")
-        _thr = _pkg.get("threshold")
-        _sens = _pkg.get("sensitivity_at_thr", 0)
-        _spec = _pkg.get("specificity_at_thr", 0)
         st.markdown(
             f"<div style='margin-bottom:8px;'>"
-            f"<span style='font-weight:700;font-size:0.9rem;'>{_label}</span><br>"
-            f"<span style='color:#607080;font-size:0.82rem;'>"
-            f"AUC {round(_auc*100,1) if _auc else '–'}%"
-            f"{f' ±{round(_std*100,1)}%' if _std else ''}"
-            f" &nbsp;·&nbsp; prah {f'{_thr:.2f}' if isinstance(_thr, float) else '–'}"
-            f"<br>Sens {round(_sens*100,0):.0f}% / Spec {round(_spec*100,0):.0f}%"
-            f"</span></div>",
+            f"<span style='font-weight:700;font-size:0.9rem;'>{_label}</span>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     st.divider()
@@ -662,9 +634,9 @@ if step == "1_anamnesis":
 <div class="soft-card">
 <b>Čo aplikácia urobí?</b><br><br>
 Najprv vypočíta predbežné skóre z piatich základných údajov (pohlavie, vek, TK, pulz)
-pomocou modelu <b>P1 Extra Trees</b> (AUC ≈ 80 %).<br><br>
+pomocou modelu <b>P1 Extra Trees</b>.<br><br>
 Potom je možné doplniť dotazníkové premenné a získať kombinované skóre
-modelu <b>P3 Extra Trees</b> (anamnéza + dotazník, AUC ≈ 81 %).
+modelu <b>P3 Extra Trees</b> (anamnéza + dotazník).
 </div>
 <div class="notice">
 <b>Pre koho je aplikácia určená:</b><br>
@@ -809,8 +781,7 @@ elif step == "3_results":
     </div>
     <span class="badge {badge_class(color_key_p3)}">{headline_p3}</span>
     <div class="metric-sub" style="margin-top:10px;">
-        Skóre je <b>{thr_text}</b> interným prahom {thr_p3:.2f} &nbsp;·&nbsp;
-        AUC {round(auc_p3*100,1) if auc_p3 else '–'}%
+        Kombinovaný model · anamnéza + dotazník
     </div>
     <div style="margin-top:8px; font-size:0.90rem; color:#1a3a5a;">
         {clinical_interpretation(prob_p3)}
