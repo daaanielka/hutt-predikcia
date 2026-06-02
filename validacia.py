@@ -1,4 +1,4 @@
-﻿"""
+"""
 Detailná validácia — hutt_analysis
 =======================================
 Bakalárska práca: Predikcia výsledku HUTT testu
@@ -11,7 +11,7 @@ Obsah:
   2. Bootstrap CI pre AUC (1000 iterácií, stratifikovaný)
   3. Kalibračné krivky + Brier score (s izotonou regresiou)
   4. Optimálny prah — Youden's J index + PPV/NPV + 95% CI
-  5. SHAP hodnoty — P3 Extra Trees (TreeExplainer)
+  5. SHAP hodnoty — P1 Extra Trees + P3 Extra Trees (TreeExplainer)
   6. Decision Curve Analysis (DCA)
   7. Permutačný test (n=1000)
   8. Fairness analýza — Pohlavie a Vek subskupiny
@@ -21,9 +21,10 @@ Výstup:
   validacia_consort.png / _kalibracia.png / _shap_bar.png / _dca.png
 
 Vybraté modely (top z analyza.py):
-  - P1  Extra Trees   (anamnéza, 5 features, AUC=0.800)
-  - P3  Extra Trees   (kombinácia, 13 features, AUC=0.800)
-  - P4  Stacking      (ET+KNN+LR→Ridge na P3, AUC=0.796)
+  - P1  Extra Trees   (anamnéza, 5 features, AUC=0.789)
+  - P3  Extra Trees   (kombinácia, 13 features, AUC=0.817)
+  - P3  Random Forest (kombinácia, 13 features, AUC=0.804)
+  - P4  Stacking      (ET+KNN+LR→Ridge na P3, AUC=0.803)
 
 Spustenie:
     python validacia.py
@@ -49,7 +50,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.feature_selection import SelectKBest, chi2, RFE
+from sklearn.feature_selection import chi2, RFE
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (roc_auc_score, roc_curve, brier_score_loss,
                               confusion_matrix, f1_score)
@@ -101,9 +102,17 @@ print("=" * 65)
 
 df = pd.read_csv('data_full1.csv')
 _n_raw = len(df)
-_n_no_a10 = int(
-    (df['A10'].isna() | (df['A10'] == -1)).sum()
-) if 'A10' in df.columns else 0
+
+# Vylúčenie pacientov s neplatným výsledkom HUTT testu (A10 == -1)
+_n_excluded_a10 = int((df['A10'] == -1).sum()) if 'A10' in df.columns else 0
+if _n_excluded_a10 > 0:
+    df = df[df['A10'] != -1].copy()
+
+# Vylúčenie pacientov s epilepsiou (B4=1) a po resuscitácii (B3=1)
+_n_b3 = int((df['B3'] == 1).sum()) if 'B3' in df.columns else 0
+_n_b4 = int((df['B4'] == 1).sum()) if 'B4' in df.columns else 0
+if _n_b3 + _n_b4 > 0:
+    df = df[~((df['B3'] == 1) | (df['B4'] == 1))].copy()
 
 admin_cols         = ['Číslo dotazníka', 'Dátum', 'Datum narodenia']
 leakage_cols       = ['Synkopa', 'Typ Synkopy']
@@ -137,6 +146,13 @@ p_srdc = [c for c in p_srdc_cols if c in df_work.columns]
 if USE_MA_DIAG:
     df_work['Ma_diag_srdcove_ochorenie'] = df_work[p_srdc].max(axis=1)
 df_work = df_work.drop(columns=ALL_REMOVE, errors='ignore')
+
+# Zlúčenie H12 a H13 — synonymné odpovede pred stratou vedomia
+if 'H12' in df_work.columns and 'H13' in df_work.columns:
+    df_work['H13'] = ((df_work['H12'] == 1) | (df_work['H13'] == 1)).astype(float)
+    df_work['H13'] = df_work['H13'].where(
+        df_work['H12'].notna() | df_work['H13'].notna(), other=np.nan)
+    df_work.drop(columns=['H12'], inplace=True)
 
 if 'A2' in df_work.columns:
     bp = df_work['A2'].str.split('/', expand=True)
@@ -292,6 +308,15 @@ SELECTED = {
                      apply_fs=True, n_p1=N_P1),
         'n_p1':  N_P1,
     },
+    'P3_RF': {
+        'label': 'P3 · Random Forest',
+        'X':     df_feat[P3_POOL],
+        'pipe':  make_pipe(RandomForestClassifier(
+                     n_estimators=200, random_state=RANDOM_STATE,
+                     n_jobs=1, class_weight='balanced'),
+                     apply_fs=True, n_p1=N_P1),
+        'n_p1':  N_P1,
+    },
 }
 
 _STACK_BASE_NAMES = ['Extra Trees', 'KNN', 'Logist. regresia']
@@ -357,11 +382,13 @@ print(f"OOF AUC = {roc_auc_score(y, oof_stack):.4f}")
 MODEL_LABELS = {
     'P1_ET':    'P1 · Extra Trees',
     'P3_ET':    'P3 · Extra Trees',
+    'P3_RF':    'P3 · Random Forest',
     'P4_stack': 'P4 · Stacking',
 }
 MODEL_COLORS = {
     'P1_ET':    'royalblue',
     'P3_ET':    'seagreen',
+    'P3_RF':    '#E07B39',
     'P4_stack': '#C357A5',
 }
 
@@ -408,7 +435,8 @@ print("\n" + "=" * 65)
 print("3. KALIBRÁCIA + BRIER SCORE")
 print("=" * 65)
 
-fig_cal, axes_cal = plt.subplots(1, 3, figsize=(15, 5))
+fig_cal, axes_cal_2d = plt.subplots(2, 2, figsize=(12, 10))
+axes_cal = axes_cal_2d.flatten()
 fig_cal.suptitle('Kalibračné krivky — ConsensusFS (prahová logika)', fontsize=12)
 
 _calib_grid = np.linspace(0.0, 1.0, 100)   # fixná os x pre interpoláciu bootstrap
@@ -587,108 +615,100 @@ MODEL_APP_THR = {_r['Model']: 0.5 for _r in thresh_rows}
 
 
 # =============================================================
-# 5. SHAP HODNOTY — P3 Extra Trees
+# 5. SHAP HODNOTY — P1 Extra Trees + P3 Extra Trees
 # =============================================================
 
 print("\n" + "=" * 65)
-print("5. SHAP HODNOTY — P3 Extra Trees")
+print("5. SHAP HODNOTY — P1 Extra Trees + P3 Extra Trees")
 print("=" * 65)
 
 if not SHAP_OK:
     print("  Preskočené — shap nie je nainštalovaný (pip install shap).")
 else:
-    # Načítame finálny model uložený analyza.py — rovnaké CV-konsenzus features
-    # ako pri trénovaní, žiaden rozdiel voči sekcii 4.
-    _p3_pkg_path = 'model_p3_et.joblib'
-    try:
-        _p3_pkg = joblib.load('model_p3_et.joblib')
-        _pipe_p3 = _p3_pkg['pipeline']
+    shap_rows = []
 
-        # Vstupné stĺpce = to, čo pipeline očakáva na vstupe
-        _input_cols = _p3_pkg.get('input_features', _p3_pkg.get('features', P3_POOL))
+    def _compute_shap(pkg_path, pool_cols, label, color, summary_fname, bar_fname):
+        """Načíta model, vypočíta SHAP, uloží oba grafy. Vracia DataFrame."""
+        try:
+            pkg   = joblib.load(pkg_path)
+            pipe  = pkg['pipeline']
+            input_cols = pkg.get('input_features', pkg.get('features', pool_cols))
+            imp_step   = pipe.named_steps['imp']
+            X_imp      = imp_step.transform(df_feat[input_cols])
+            if 'fs' in pipe.named_steps:
+                fs_step  = pipe.named_steps['fs']
+                X_sel    = fs_step.transform(X_imp)
+                fs_mask  = fs_step.get_support()
+                sel_cols = [c for c, m in zip(input_cols, fs_mask) if m]
+            else:
+                X_sel    = X_imp
+                sel_cols = list(input_cols)
+            clf = pipe.named_steps['clf']
+            print(f"  Načítané: {pkg_path}")
+        except FileNotFoundError:
+            print(f"  UPOZORNENIE: {pkg_path} neexistuje — preskočené.")
+            return pd.DataFrame()
 
-        # Prejdi cez imp + fs krok (bez clf) — presne to čo classifier dostal pri tréningu
-        _imp_step = _pipe_p3.named_steps['imp']
-        X_imp_shap = _imp_step.transform(df_feat[_input_cols])
+        print(f"  Features ({len(sel_cols)}): {', '.join(sel_cols)}")
+        print(f"  Počítam SHAP hodnoty ({label})...")
 
-        if 'fs' in _pipe_p3.named_steps:
-            _fs_step = _pipe_p3.named_steps['fs']
-            X_sel = _fs_step.transform(X_imp_shap)
-            _fs_mask = _fs_step.get_support()
-            sel_cols = [c for c, m in zip(_input_cols, _fs_mask) if m]
+        explainer   = shap.TreeExplainer(clf)
+        shap_values = explainer.shap_values(X_sel)
+        if isinstance(shap_values, list):
+            shap_pos = shap_values[1]
+        elif hasattr(shap_values, 'ndim') and shap_values.ndim == 3:
+            shap_pos = shap_values[:, :, 1]
         else:
-            X_sel = X_imp_shap
-            sel_cols = list(_input_cols)
+            shap_pos = shap_values
 
-        et_final = _pipe_p3.named_steps['clf']
-        print(f"  Načítané: model_p3_et.joblib")
+        # Summary (beeswarm)
+        fig_s, ax_s = plt.subplots(figsize=(10, max(5, len(sel_cols) * 0.45)))
+        shap.summary_plot(shap_pos, X_sel, feature_names=sel_cols,
+                          show=False, plot_type='dot')
+        plt.title(f'SHAP hodnoty — {label}', fontsize=12)
+        plt.tight_layout()
+        plt.savefig(summary_fname, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  Uložené: {summary_fname}")
 
-    except FileNotFoundError:
-        # fallback — trénuj náhradný model
-        print("  UPOZORNENIE: model_p3_et.joblib neexistuje — tréning náhradného modelu...")
-        X_p3 = df_feat[P3_POOL]
-        imp = SimpleImputer(strategy='median')
-        X_imp = imp.fit_transform(X_p3)
-        fs = P3SelectorConsensus(n_p1=N_P1)
-        fs.fit(X_imp, y)
-        mask = fs.get_support()
-        sel_cols = [c for c, m in zip(P3_POOL, mask) if m]
-        X_sel = fs.transform(X_imp)
-        et_final = ExtraTreesClassifier(n_estimators=200, random_state=RANDOM_STATE,
-                                        n_jobs=1, class_weight='balanced')
-        et_final.fit(X_sel, y)
+        # Bar plot
+        mean_abs = np.abs(shap_pos).mean(axis=0)
+        order    = np.argsort(mean_abs)[::-1]
+        fig_b, ax_b = plt.subplots(figsize=(8, max(4, len(sel_cols) * 0.4)))
+        ax_b.barh([sel_cols[i] for i in order[::-1]],
+                  [mean_abs[i] for i in order[::-1]],
+                  color=color, alpha=0.8)
+        ax_b.set_xlabel('Priemerná |SHAP| hodnota')
+        ax_b.set_title(f'Priemerný vplyv features — {label}', fontsize=11)
+        ax_b.grid(axis='x', alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(bar_fname, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  Uložené: {bar_fname}")
 
-    print(f"  Vybraté features pre SHAP ({len(sel_cols)}): {', '.join(sel_cols)}")
-    print("  Počítam SHAP hodnoty (TreeExplainer)...")
+        print(f"\n  Top 5 features podľa SHAP ({label}):")
+        rows = []
+        for i in order:
+            rows.append({'Model': label, 'Feature': sel_cols[i],
+                         'Mean_abs_SHAP': round(float(mean_abs[i]), 6)})
+        for i in order[:5]:
+            print(f"    {sel_cols[i]:<35} mean|SHAP| = {mean_abs[i]:.4f}")
+        return pd.DataFrame(rows)
 
-    explainer   = shap.TreeExplainer(et_final)
-    shap_values = explainer.shap_values(X_sel)
+    _shap_p1 = _compute_shap(
+        'model_p1_et.joblib', P1_COLS,
+        'P1 · Extra Trees', 'royalblue',
+        'validacia_shap_p1_summary.png', 'validacia_shap_p1_bar.png')
 
-    # Pre binárnu klasifikáciu: shap_values môže byť list [neg, pos]
-    # alebo 3D pole (n_samples, n_features, n_classes) v novších verziách SHAP
-    if isinstance(shap_values, list):
-        shap_pos = shap_values[1]
-    elif hasattr(shap_values, 'ndim') and shap_values.ndim == 3:
-        shap_pos = shap_values[:, :, 1]
-    else:
-        shap_pos = shap_values
+    print()
 
-    # Summary plot — beeswarm
-    fig_shap, ax_shap = plt.subplots(figsize=(10, max(6, len(sel_cols) * 0.4)))
-    shap.summary_plot(shap_pos, X_sel, feature_names=sel_cols,
-                      show=False, plot_type='dot')
-    plt.title('SHAP hodnoty — P3 Extra Trees ()', fontsize=12)
-    plt.tight_layout()
-    plt.savefig('validacia_shap_summary.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print("Uložené: validacia_shap_summary.png")
+    _shap_p3 = _compute_shap(
+        'model_p3_et.joblib', P3_POOL,
+        'P3 · Extra Trees', 'seagreen',
+        'validacia_shap_summary.png', 'validacia_shap_bar.png')
 
-    # Bar plot — priemerné |SHAP|
-    mean_abs = np.abs(shap_pos).mean(axis=0)
-    order    = np.argsort(mean_abs)[::-1]
-    fig_bar, ax_bar = plt.subplots(figsize=(9, max(5, len(sel_cols) * 0.35)))
-    ax_bar.barh([sel_cols[i] for i in order[::-1]],
-                [mean_abs[i] for i in order[::-1]],
-                color='seagreen', alpha=0.8)
-    ax_bar.set_xlabel('Priemerná |SHAP| hodnota')
-    ax_bar.set_title('Priemerný vplyv features — P3 Extra Trees ()', fontsize=11)
-    ax_bar.grid(axis='x', alpha=0.3)
-    plt.tight_layout()
-    plt.savefig('validacia_shap_bar.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print("Uložené: validacia_shap_bar.png")
-
-    # CSV — priemerné |SHAP|
-    shap_df = pd.DataFrame({
-        'Feature':    [sel_cols[i] for i in order],
-        'Mean_abs_SHAP': [round(mean_abs[i], 6) for i in order],
-    })
-    _val_sheets['shap'] = shap_df
-    print("Pripravené: sheet 'shap'")
-
-    print("\n  Top 5 features podľa SHAP (P3 ET):")
-    for i in order[:5]:
-        print(f"    {sel_cols[i]:<35} mean|SHAP| = {mean_abs[i]:.4f}")
+    _val_sheets['shap'] = pd.concat([_shap_p1, _shap_p3], ignore_index=True)
+    print("\nPripravené: sheet 'shap'  (P1 ET + P3 ET)")
 
 
 # =============================================================
@@ -831,6 +851,9 @@ def _subgroup_metrics(y_sub, oof_sub, thr):
 
 fairness_rows = []
 
+def _fmt(v):
+    return f"{v:5.3f}" if not np.isnan(v) else "  n/a"
+
 for key, oof in oof_probas.items():
     thr      = MODEL_APP_THR[MODEL_LABELS[key]]
     thr_type = "fixný 0.5"
@@ -854,9 +877,6 @@ for key, oof in oof_probas.items():
         y_sg   = y[pos_arr]
         oof_sg = oof[pos_arr]
         auc_sg, sens_sg, spec_sg, ppv_sg, npv_sg = _subgroup_metrics(y_sg, oof_sg, thr)
-
-        def _fmt(v):
-            return f"{v:5.3f}" if not np.isnan(v) else "  n/a"
 
         print(f"  {sg_name:<16} {len(pos_arr):>4}  {y_sg.mean()*100:>5.1f}%  "
               f"{_fmt(auc_sg):>6}  {_fmt(sens_sg):>5}  {_fmt(spec_sg):>5}  "
