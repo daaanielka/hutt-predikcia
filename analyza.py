@@ -1,4 +1,4 @@
-﻿"""
+"""
 Predikcia výsledku HUTT testu — hutt_analysis.py
 ======================================================
 Bakalárska práca: Predikcia výsledku HUTT testu
@@ -24,7 +24,6 @@ Požiadavky:
     pip install pandas numpy scikit-learn xgboost catboost matplotlib joblib
 """
 
-import ast
 from collections import Counter
 
 import pandas as pd
@@ -40,9 +39,8 @@ from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.feature_selection import SelectKBest, chi2, RFE
-from sklearn.model_selection import (StratifiedKFold, cross_val_score,
-                                     cross_val_predict)
+from sklearn.feature_selection import chi2, RFE
+from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (roc_auc_score, confusion_matrix, roc_curve,
                               f1_score)
 from sklearn.base import BaseEstimator, TransformerMixin, clone
@@ -72,8 +70,7 @@ MODEL_COLORS = {
     'XGBoost':             '#EF9F27',
     'CatBoost':            '#D85A30',
     'SVM':                 '#7F77DD',
-    'KNN':                 '#E9A',
-
+    'KNN':                 '#4DA8C7',
 }
 
 
@@ -163,8 +160,22 @@ print("=" * 65)
 df = pd.read_csv('data_full1.csv')
 print(f"Dataset: {df.shape[0]} pacientov, {df.shape[1]} stĺpcov")
 
+# Vylúčenie pacientov s neplatným výsledkom HUTT testu (A10 == -1)
+_n_excluded_sv = int((df['A10'] == -1).sum()) if 'A10' in df.columns else 0
+if _n_excluded_sv > 0:
+    df = df[df['A10'] != -1].copy()
+    print(f"Vylúčení pacienti (neplatný výsledok testu, A10=-1): {_n_excluded_sv}"
+          f"  → zostatok: {len(df)} pacientov")
+
+# Vylúčenie pacientov s epilepsiou (B4=1) a po resuscitácii (B3=1)
+_n_b3 = int((df['B3'] == 1).sum()) if 'B3' in df.columns else 0
+_n_b4 = int((df['B4'] == 1).sum()) if 'B4' in df.columns else 0
+if _n_b3 + _n_b4 > 0:
+    df = df[~((df['B3'] == 1) | (df['B4'] == 1))].copy()
+    print(f"Vylúčení: epilepsia (B4=1): {_n_b4}, po resuscitácii (B3=1): {_n_b3}"
+          f"  → zostatok: {len(df)} pacientov")
+
 a10_vals = df['A10'].replace(-1, np.nan).dropna()
-print(f"A10 (cieľ): {a10_vals.value_counts().to_dict()}")
 print(f"Pozitívnych (A10=1): {a10_vals.mean()*100:.1f}%")
 print("""
 Cieľová premenná: A10
@@ -233,6 +244,14 @@ else:
 
 df_work = df_work.drop(columns=ALL_REMOVE, errors='ignore')
 
+# Zlúčenie H12 a H13 — synonymné odpovede pred stratou vedomia
+if 'H12' in df_work.columns and 'H13' in df_work.columns:
+    df_work['H13'] = ((df_work['H12'] == 1) | (df_work['H13'] == 1)).astype(float)
+    df_work['H13'] = df_work['H13'].where(
+        df_work['H12'].notna() | df_work['H13'].notna(), other=np.nan)
+    df_work.drop(columns=['H12'], inplace=True)
+    print("H12 + H13 zlúčené do H13 (1 ak aspoň jedna = 1); H12 vyradená.")
+
 if 'A2' in df_work.columns:
     bp = df_work['A2'].str.split('/', expand=True)
     df_work['A2_sys'] = pd.to_numeric(bp[0], errors='coerce')
@@ -255,7 +274,7 @@ if _n_dropped > 0:
           f"buď pôvodne -1 alebo skutočne chýbajúce)")
 df_work['A10'] = df_work['A10'].astype(int)
 
-y       = df_work['A10'].values
+y = df_work['A10'].values
 df_feat = df_work.drop(columns=['A10']).copy()
 
 print(f"Po predspracovaní: {len(y)} pacientov, {df_feat.shape[1]} features")
@@ -502,6 +521,10 @@ results_df = pd.DataFrame(all_results)
 
 # Ensemble konštanty
 RUN_ENSEMBLE      = True   # nastavte False pre rýchly beh bez P4
+# Fallback hodnoty — prepísané ak RUN_ENSEMBLE=True
+_mean_s        = 0.0
+_std_s         = 0.0
+oof_proba_stack = np.zeros(len(y))
 _PNAME_STACK      = 'P4_stacking'
 _MNAME_STACK      = 'Stacking (ET+KNN+LR→Ridge)'
 _STACK_BASE_NAMES = ['Extra Trees', 'KNN', 'Logist. regresia']
@@ -684,8 +707,7 @@ for pipe in ['P1_anamneza', 'P2_dotaznik', 'P3_kombinacia']:
 
     print(f"\n{pipe}  ·  {mname}")
 
-    from collections import Counter as _Ctr
-    freq = _Ctr(f for fold in folds for f in fold)
+    freq = Counter(f for fold in folds for f in fold)
     n_folds = len(folds)
 
     # Per-fold výpis
@@ -736,33 +758,49 @@ print("7. GRAFY")
 print("=" * 65)
 
 
-# ROC krivky — najlepší model každej pipeline
-_roc_pipes  = ['P1_anamneza', 'P2_dotaznik', 'P3_kombinacia']
-_roc_colors = ['royalblue', 'darkorange', 'seagreen']
-fig1, axes1 = plt.subplots(1, 3, figsize=(15, 5))
-fig1.suptitle('ROC krivky — najlepší model každej pipeline [ConsensusFS (prahová logika)]', fontsize=12)
-for ax, pipe, col in zip(axes1, _roc_pipes, _roc_colors):
-    pb      = best_per_pipe[pipe]
-    mname   = pb['Model']
-    oof     = all_oof_proba[(pipe, mname)]
+# ROC krivky — 2×2 layout: P1, P2, P3, P4
+_roc_items = [
+    ('P1_anamneza',  'royalblue'),
+    ('P2_dotaznik',  'darkorange'),
+    ('P3_kombinacia','seagreen'),
+    (_PNAME_STACK,   '#9B59B6'),   # P4 stacking — fialová
+]
+fig1, axes1 = plt.subplots(2, 2, figsize=(12, 10))
+fig1.suptitle('ROC krivky — najlepší model každej pipeline', fontsize=13)
+axes1_flat = axes1.flatten()
+
+for ax, (pipe, col) in zip(axes1_flat, _roc_items):
+    if pipe == _PNAME_STACK:
+        if not RUN_ENSEMBLE:
+            ax.set_visible(False)
+            continue
+        oof    = all_oof_proba[(_PNAME_STACK, _MNAME_STACK)]
+        mname  = _MNAME_STACK
+        cv_auc = _mean_s
+    else:
+        pb     = best_per_pipe[pipe]
+        mname  = pb['Model']
+        oof    = all_oof_proba[(pipe, mname)]
+        cv_auc = pb['AUC_CV_mean']
+
     fpr_arr, tpr_arr, _ = roc_curve(y, oof)
-    auc_val  = roc_auc_score(y, oof)          # OOF AUC (≠ priemer foldov)
-    cv_auc   = pb['AUC_CV_mean']
+    auc_val = roc_auc_score(y, oof)
     ax.plot(fpr_arr, tpr_arr, color=col, lw=2,
             label=f'{mname}\nOOF AUC={auc_val:.3f}  CV AUC={cv_auc:.3f}')
     ax.plot([0, 1], [0, 1], '--', color='gray', lw=1)
-    ax.set_title(pipe)
+    ax.set_title(pipe, fontsize=11)
     ax.set_xlabel('1 − Specificita')
     ax.set_ylabel('Sensitivita')
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
+
 plt.tight_layout()
 plt.savefig('hutt_roc.png', dpi=150, bbox_inches='tight')
 plt.close()
-print("Uložené: hutt_roc.png")
+print("Uložené: hutt_roc.png  (2×2: P1, P2, P3, P4)")
 
 
-# Per-fold AUC variabilita
+# Per-fold AUC variabilita — P1, P2, P3 (bez P4 — stacking má iný typ výstupu)
 model_names_plot = list(classifiers().keys())
 fig2, axes2 = plt.subplots(1, 3, figsize=(16, 6), sharey=True)
 fig2.suptitle('CV AUC per fold [ConsensusFS (prahová logika)]', fontsize=13)
@@ -796,7 +834,7 @@ fig2.legend(handles=patches, loc='lower center', ncol=6,
 plt.tight_layout(rect=[0, 0.06, 1, 1])
 plt.savefig('hutt_cv_folds.png', dpi=150, bbox_inches='tight')
 plt.close()
-print("Uložené: hutt_cv_folds.png")
+print("Uložené: hutt_cv_folds.png  (1×3: P1, P2, P3)")
 
 
 # =============================================================
@@ -945,10 +983,6 @@ for pname, mname, pool, apply_fs, n_p1_s, fixed_thr, fname in _APP_MODELS:
     }
     joblib.dump(pkg, fname)
     _saved_pkgs[pname] = pkg
-
-    # Porovnávacia tabuľka: CV konsenzus vs finálny model (teraz identické)
-    cv_set    = set(cv_feats)
-    final_set = set(cv_feats)
     print(f"  Uložené: {fname}")
     print(f"    CV-konsenzus features (≥3/5 foldov): {len(cv_feats)}")
     for f in cv_feats:
