@@ -1,4 +1,4 @@
-﻿"""
+"""
 Exploratory Data Analysis — hutt_analysis
 ===============================================
 Bakalárska práca: Predikcia výsledku HUTT testu
@@ -57,11 +57,27 @@ print("=" * 65)
 
 df = pd.read_csv('data_full1.csv')
 _n_raw = len(df)
-_n_no_a10 = int(
-    (df['A10'].isna() | (df['A10'] == -1)).sum()
-) if 'A10' in df.columns else 0
 
-print(f"Načítané záznamy: {_n_raw}  |  stĺpcov: {df.shape[1]}")
+# Explicitné vylúčenie pacientov s neplatným výsledkom HUTT testu (A10 == -1)
+# Ide o záznamy kde test nebol štandardne dokončený alebo výsledok nie je
+# klasifikovateľný ako pozitívny ani negatívny.
+_n_excluded = int((df['A10'] == -1).sum()) if 'A10' in df.columns else 0
+if _n_excluded > 0:
+    df = df[df['A10'] != -1].copy()
+    print(f"Vylúčení pacienti (neplatný výsledok testu, A10=-1): {_n_excluded}")
+
+_n_no_a10 = int(df['A10'].isna().sum()) if 'A10' in df.columns else 0
+
+# Explicitné vylúčenie pacientov s epilepsiou (B4=1) a po resuscitácii (B3=1)
+# Títo pacienti majú platný výsledok A10, ale ich diagnóza je mimo rozsahu
+# cieľovej skupiny — model pre nich nie je určený ani validovaný.
+_n_b3 = int((df['B3'] == 1).sum()) if 'B3' in df.columns else 0
+_n_b4 = int((df['B4'] == 1).sum()) if 'B4' in df.columns else 0
+if _n_b3 + _n_b4 > 0:
+    df = df[~((df['B3'] == 1) | (df['B4'] == 1))].copy()
+    print(f"Vylúčení: epilepsia (B4=1): {_n_b4}, po resuscitácii (B3=1): {_n_b3}")
+
+print(f"Načítané záznamy: {_n_raw}  |  po vylúčení: {len(df)}  |  stĺpcov: {df.shape[1]}")
 
 admin_cols         = ['Číslo dotazníka', 'Dátum', 'Datum narodenia']
 leakage_cols       = ['Synkopa', 'Typ Synkopy']
@@ -96,6 +112,17 @@ p_srdc = [c for c in p_srdc_cols if c in df_work.columns]
 if USE_MA_DIAG:
     df_work['Ma_diag_srdcove_ochorenie'] = df_work[p_srdc].max(axis=1)
 
+# Zlúčenie H12 a H13 — sú to synonymá:
+#   H12 = "Pacient nepociťoval zvláštne symptómy pred stratou vedomia" (nič zvláštne)
+#   H13 = "Pacient si nepamätá pocity pred stratou vedomia" (nepamätám si)
+# Nová H13 = 1 ak pacient zaškrtol aspoň jednu z možností; H12 sa vyradí.
+if 'H12' in df_work.columns and 'H13' in df_work.columns:
+    df_work['H13'] = ((df_work['H12'] == 1) | (df_work['H13'] == 1)).astype(float)
+    df_work['H13'] = df_work['H13'].where(
+        df_work['H12'].notna() | df_work['H13'].notna(), other=np.nan)
+    df_work.drop(columns=['H12'], inplace=True)
+    print("H12 + H13 zlúčené do H13 (1 ak aspoň jedna = 1); H12 vyradená.")
+
 df_work = df_work.drop(columns=ALL_REMOVE, errors='ignore')
 
 if 'A2' in df_work.columns:
@@ -118,7 +145,7 @@ y       = df_work['A10'].values
 df_feat = df_work.drop(columns=['A10']).copy()
 
 print(f"Po predspracovaní: {len(y)} pacientov, {df_feat.shape[1]} features")
-print(f"A10=1: {y.sum()} ({y.mean()*100:.1f}%)  A10=0: {(1-y).sum()}")
+print(f"A10=1: {y.sum()} ({y.mean()*100:.1f}%)  A10=0: {(1-y).sum()}" )
 
 # skupiny pre porovnanie
 _pos_idx = np.where(y == 1)[0]
@@ -194,8 +221,11 @@ _pos = int(y.sum())
 _neg = _n - _pos
 
 print(f"  Záznamy v súbore         : {_n_raw}")
-print(f"  Z toho s vyplneným A10   : {_n}  → títo tvoria analytickú vzorku")
-print(f"  Vylúčení (A10 chýba)     : {_n_raw - _n}")
+print(f"  Vylúčení (A10=-1)        : {_n_excluded}")
+print(f"  Vylúčení (epilepsia B4)  : {_n_b4}")
+print(f"  Vylúčení (resuscitácia B3): {_n_b3}")
+print(f"  Analytická vzorka        : {_n}  (s platným výsledkom A10)")
+print(f"  Vylúčení spolu           : {_n_raw - _n}")
 print()
 print(f"  HUTT pozitívny (A10=1)  : {_pos}  ({_pos/_n*100:.1f} %)")
 print(f"  HUTT negatívny (A10=0)  : {_neg}  ({_neg/_n*100:.1f} %)")
